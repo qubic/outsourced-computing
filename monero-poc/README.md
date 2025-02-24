@@ -13,7 +13,7 @@
 
 
 ## Highlevel Process Description
-![Qubic - Monero POC Highlevel Process](images/monero-poc-highlevel-process.png)
+![Qubic - Outsourced Computing Highlevel Monero POC Process Flowchart](images/QubicOutsourcedComputing_MoneroPOC.png)
 
 ## POC Phases
 The POC is junked into 5 Phases.
