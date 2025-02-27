@@ -13,9 +13,14 @@
 
 
 ## Highlevel Process Description
-![Qubic - Outsourced Computing Highlevel Monero POC Process FlowChart](images/QubicOutsourcedComputing_MoneroPOC.png)
+![Qubic - Outsourced Computing Highlevel Monero POC Process FlowChart](images/QubicOutsourcedComputing_MoneroPOC_v2.png)
 
-[Click here for PDF](images/QubicOutsourcedComputing_MoneroPOC.pdf)
+[Click here for PDF](images/QubicOutsourcedComputing_MoneroPOC_v2.pdf)
+
+## QUBIC's Monero Wallet Address
+```
+8C5gopBP7uHNjPPZWhgUVCSe3s2dy4DLjZRgwhMp8DLpPoXTU5epY2VMKP1Vnc5dwJJ9QDCiKbMjberggTu3qYWiGMYFHzd
+```
 
 ## POC Phases
 The POC is junked into 5 Phases.
