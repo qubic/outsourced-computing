@@ -43,15 +43,29 @@ struct
     unsigned int sizeAndType;
     unsigned int dejavu;
 
-    unsigned char sourcePublicKey[32];
-    unsigned char zero[32];
-    unsigned long long taskIndex;
-    xmrig::Job job;
+    unsigned char sourcePublicKey[32]; // the source public key is the DISPATCHER public key
+    unsigned char zero[32];  // empty/zero 0
+    unsigned char gammingNonce[32];
+
+    unsigned long long taskIndex; // ever increasing number (unix timestamp in ms)
+
+    unsigned char m_blob[408];
+    unsigned long long m_target;
+    unsigned long long m_height;
+    unsigned char m_seed[32];
+
     unsigned char signature[64];
 } task;
 ```
 
-1. Custom Mining Solution
+> [!Note]
+> The shared key for Destination=0 is all-zeros
+
+To verify the message, please refer to https://github.com/qubic/core/blob/main/src/qubic.cpp#L474
+To find the message type, please refer to https://github.com/qubic/core/blob/main/src/qubic.cpp#L555
+
+
+2. Custom Mining Solution
 After Processing the Task and generating the solution. The solution needs to be sent back to the network.
 
 **The Solution struct**
@@ -62,13 +76,18 @@ struct
     unsigned int dejavu;
 
     unsigned char sourcePublicKey[32];
-    unsigned char zero[32];
-    unsigned long long taskIndex;
+    unsigned char zero[32]; // empty/zero 0
+    unsigned char gammingNonce[32];
+
+    unsigned long long taskIndex; // sohuld match the index from task
+
     unsigned int nonce;         // xmrig::JobResult.nonce
     unsigned char result[32];   // xmrig::JobResult.result
+    
     unsigned char signature[64];
 } solution;
 ```
+
 >[!CAUTION]
 > The Above structs already contain the [RequestResponseHeader](https://github.com/qubic/core/blob/main/src/network_messages/header.h).
 
@@ -81,7 +100,7 @@ Connect to the network and listen for the packet type `BROADCAST_MESSAGE (1)`.
 Identify a Task:
 1. The source must be [DISPATCHER](https://github.com/qubic/core/blob/main/src/public_settings.h#L60)
 2. Verify Signature
-3. Verify `sizeof(task)`
+3. Check the Message type (sample: https://github.com/qubic/core/blob/main/src/qubic.cpp#L555)
 4. Verify `taskIndex` is higher than previous loaded task
 
 If the above match, use that task and proceed with solution finding.
