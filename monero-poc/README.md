@@ -54,10 +54,11 @@ struct
 
     unsigned long long taskIndex; // ever increasing number (unix timestamp in ms)
 
-    unsigned char m_blob[408];
-    unsigned long long m_target;
-    unsigned long long m_height;
-    unsigned char m_seed[32];
+    unsigned char m_blob[408]; // Job data from pool
+    unsigned long long m_size;  // length of the blob
+    unsigned long long m_target; // Pool difficulty
+    unsigned long long m_height; // Block height
+    unsigned char m_seed[32]; // Seed hash for XMR
 
     unsigned char signature[64];
 } task;
