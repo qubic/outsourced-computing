@@ -88,6 +88,7 @@ struct
     unsigned long long taskIndex; // sohuld match the index from task
 
     unsigned int nonce;         // xmrig::JobResult.nonce
+    unsigned int padding;       // reserve for future use
     unsigned char result[32];   // xmrig::JobResult.result
     
     unsigned char signature[64];
