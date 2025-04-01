@@ -18,3 +18,6 @@ On Windows, use the CMake GUI to create a Visual Studio project and then build t
 
 ### USAGE
 `./oc_verifier [nodeip0] [nodeip1] ... [nodeipN]`
+
+Screenshot:
+![image](https://github.com/user-attachments/assets/c629abc8-afb9-4d05-97c5-487456946774)
