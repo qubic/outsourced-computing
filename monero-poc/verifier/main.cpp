@@ -43,8 +43,8 @@ struct solution
 
     uint64_t _taskIndex;
     uint32_t nonce;         // xmrig::JobResult.nonce
+    uint32_t padding; // reserve for future use
     uint8_t result[32];   // xmrig::JobResult.result
-    uint8_t pad[4];
     uint8_t signature[64];
 } ;
 
