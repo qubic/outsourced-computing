@@ -1,0 +1,3 @@
+[submodule "monero-poc/verifier/RandomX"]
+	path = monero-poc/verifier/RandomX
+	url = https://github.com/tevador/RandomX.git
