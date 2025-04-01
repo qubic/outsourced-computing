@@ -115,7 +115,7 @@ void verifyThread()
         {
             if (candidate._taskIndex < local_task.taskIndex)
             {
-                gStale++;
+                gStale.fetch_add(1);
                 uint32_t nonce = candidate.nonce;
                 printf("Stale Share from comp %d\n", nonce % 676);
                 continue;
@@ -137,13 +137,13 @@ void verifyThread()
             byteToHex(out, hex, 32);
             if (v < local_task.m_target)
             {
-                gValid++;
+                gValid.fetch_add(1);
 
                 printf("Valid Share from comp %d: %s\n", nonce % 676, hex);
             }
             else
             {
-                gInValid++;
+                gInValid.fetch_add(1);
                 printf("Invalid Share from comp %d: %s\n", nonce % 676, hex);
             }
         }
@@ -169,7 +169,8 @@ void listenerThread(char* nodeIp)
                 qc = make_qc(nodeIp, PORT);
                 qc->exchangePeer();// do the handshake stuff
                 needReconnect = false;
-                nPeer++;
+                nPeer.fetch_add(1);
+                printf("Connected to %s\n", nodeIp);
             }
             auto header = qc->receiveHeader();
             std::vector<uint8_t> buff;
@@ -177,7 +178,7 @@ void listenerThread(char* nodeIp)
             if (sz > 0xFFFFFF)
             {
                 needReconnect = true;
-                nPeer--;
+                nPeer.fetch_add(-1);
                 continue;
             }
             sz -= sizeof(RequestResponseHeader);
@@ -293,7 +294,7 @@ void listenerThread(char* nodeIp)
             printf("%s\n", ex.what());
             fflush(stdout);
             needReconnect = true;
-            nPeer--;
+            nPeer.fetch_add(-1);;
             SLEEP(1000);
         }
     }
