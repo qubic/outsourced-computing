@@ -170,6 +170,7 @@ void listenerThread(char* nodeIp)
                 nPeer.fetch_add(1);
                 qc = make_qc(nodeIp, PORT);
                 qc->exchangePeer();// do the handshake stuff
+                // TODO: connect to received peers
                 printf("Connected to %s\n", nodeIp);
             }
             auto header = qc->receiveHeader();
@@ -196,6 +197,8 @@ void listenerThread(char* nodeIp)
                     memcpy(&sharedKeyAndGammingNonce[32], share->gammingNonce, 32);
                     uint8_t gammingKey[32];
                     KangarooTwelve(sharedKeyAndGammingNonce, 64, gammingKey, 32);
+
+                    //TODO: verify sig here
 
                     if (gammingKey[0] != 2)
                     {
@@ -287,6 +290,7 @@ void listenerThread(char* nodeIp)
                     debug_log += std::string(dbg); memset(dbg, 0, sizeof(dbg));
                     printf("%s", debug_log.c_str());
                 }
+                // TODO: help relaying the messages to connected peers
             }
             fflush(stdout);
         }
