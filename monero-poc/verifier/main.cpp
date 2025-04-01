@@ -166,10 +166,10 @@ void listenerThread(char* nodeIp)
     {
         try {
             if (needReconnect) {
-                qc = make_qc(nodeIp, PORT);
-                qc->exchangePeer();// do the handshake stuff
                 needReconnect = false;
                 nPeer.fetch_add(1);
+                qc = make_qc(nodeIp, PORT);
+                qc->exchangePeer();// do the handshake stuff
                 printf("Connected to %s\n", nodeIp);
             }
             auto header = qc->receiveHeader();
