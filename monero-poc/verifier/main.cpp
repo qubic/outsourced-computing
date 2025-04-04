@@ -11,9 +11,27 @@
 #include <mutex>
 #include <queue>
 #include <atomic>
+#include <sstream>
+#include <iostream>
 
 #define DISPATCHER "XPXYKFLGSWRHRGAUKWFWVXCDVEYAPCPCNUTMUDWFGDYQCWZNJMWFZEEGCFFO"
 uint8_t dispatcherPubkey[32] = {0};
+uint8_t operatorSeed[56] = {0};
+uint8_t operatorPublicKey[32] = {0};
+uint8_t operatorSubSeed[32]= {0};
+uint8_t operatorPrivateKey[32]= {0};
+char operatorPublicIdentity[128] = {0};
+#define CUSTOM_MINING_SOLUTION_VERIFICATION_MESSAGE_TYPE 55
+
+#define DUMMY_TEST 0
+
+#if DUMMY_TEST
+#define OPERATOR_PORT 31841
+#else
+#define OPERATOR_PORT 21841
+#endif
+
+
 #define PORT 21841
 #define SLEEP(x) std::this_thread::sleep_for(std::chrono::milliseconds (x));
 bool shouldExit = false;
@@ -48,6 +66,17 @@ struct solution
     uint8_t signature[64];
 } ;
 
+struct VerifiedSolution
+{
+    uint64_t everIncreasingNonceAndCommandType;
+    uint64_t taskIndex;
+    uint32_t nonce;
+    uint32_t padding;
+
+    uint8_t signature[64];
+};
+
+
 // simple poc design and queue, need better design to have higher precision
 std::mutex taskLock;
 task currentTask;
@@ -59,8 +88,111 @@ std::atomic<uint64_t> gStale;
 std::atomic<uint64_t> gInValid;
 std::atomic<uint64_t> gValid;
 std::atomic<int> nPeer;
+
+std::mutex gValidSolLock;
+std::vector<solution> gSubmittingSolutionsVec;
+std::atomic<uint64_t> gSubmittedSols(0);
+
 #define XMR_NONCE_POS 39
 #define XMR_VERIFY_THREAD 4
+
+void getKey()
+{
+    getSubseedFromSeed((unsigned char*)operatorSeed, operatorSubSeed);
+    getPrivateKeyFromSubSeed(operatorSubSeed, operatorPrivateKey);
+    getPublicKeyFromPrivateKey(operatorPrivateKey, operatorPublicKey);
+    getIdentityFromPublicKey(operatorPublicKey, operatorPublicIdentity, false);
+}
+
+void sendSol(QCPtr pConnection)
+{
+    solution validSol;
+    {
+        bool haveValidSolsToSubmited = false;
+        {
+            std::lock_guard<std::mutex> validLock(gValidSolLock);
+            if (!gSubmittingSolutionsVec.empty())
+            {
+                validSol = gSubmittingSolutionsVec.front();
+                haveValidSolsToSubmited = true;
+            }
+        }
+
+        // Submit the validated solutions. Make sure the solution not come from owned computor ID
+        if (haveValidSolsToSubmited)
+        {
+            struct {
+                RequestResponseHeader header;
+                VerifiedSolution verifiedSol;
+            } packet;
+
+            // Header
+            packet.header.setSize(sizeof(packet));
+            packet.header.randomizeDejavu();
+            packet.header.setType(CUSTOM_MINING_SOLUTION_VERIFICATION_MESSAGE_TYPE);
+            uint64_t curTime = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+            uint64_t commandByte = (uint64_t)(CUSTOM_MINING_SOLUTION_VERIFICATION_MESSAGE_TYPE) << 56;
+            packet.verifiedSol.everIncreasingNonceAndCommandType = commandByte | curTime;
+
+            // Payload
+            packet.verifiedSol.taskIndex = validSol._taskIndex;
+            packet.verifiedSol.nonce = validSol.nonce;
+            packet.verifiedSol.padding = validSol.padding;
+
+            // Sign the message
+            uint8_t digest[32] = {0};
+            uint8_t signature[64] = {0};
+            KangarooTwelve(
+                (unsigned char*)&packet.verifiedSol,
+                sizeof(packet.verifiedSol) - 64,
+                digest,
+                32);
+            sign(operatorSubSeed, operatorPublicKey, digest, signature);
+            memcpy(packet.verifiedSol.signature, signature, 64);
+
+            // Send data
+            int dataSent = pConnection->sendData((uint8_t*)&packet, sizeof(packet));
+
+            // Send successfull, erase it from the valid queue
+            if (dataSent > 0)
+            {
+                std::lock_guard<std::mutex> validLock(gValidSolLock);
+                if (!gSubmittingSolutionsVec.empty())
+                {
+                    gSubmittingSolutionsVec.erase(gSubmittingSolutionsVec.begin());
+                    gSubmittedSols.fetch_add(1);
+                }
+            }
+        }
+    }
+}
+
+void sendVerifiedSolution(const char* nodeIp)
+{
+    QCPtr qc;
+    bool needReconnect = true;
+    std::string log_header = "[" + std::string(nodeIp) + "]: ";
+    while (!shouldExit)
+    {
+        try {
+            if (needReconnect)
+            {
+                needReconnect = false;
+                qc = make_qc(nodeIp, OPERATOR_PORT);
+                qc->exchangePeer();// do the handshake stuff
+                printf("%sConnected OPERATOR node %s\n", log_header.c_str(), nodeIp);
+            }
+            sendSol(qc);
+        }
+        catch (std::logic_error &ex) {
+            printf("%s\n", ex.what());
+            fflush(stdout);
+            needReconnect = true;
+            nPeer.fetch_add(-1);;
+            SLEEP(1000);
+        }
+    }
+}
 
 void verifyThread()
 {
@@ -139,7 +271,15 @@ void verifyThread()
             {
                 gValid.fetch_add(1);
 
+                // Save the solution for submiting to node
+#if !DUMMY_TEST
+                {
+                    std::lock_guard<std::mutex> validLock(gValidSolLock);
+                    gSubmittingSolutionsVec.push_back(candidate);
+                }
+#endif
                 printf("Valid Share from comp %d: %s\n", nonce % 676, hex);
+
             }
             else
             {
@@ -151,13 +291,25 @@ void verifyThread()
         {
             SLEEP(100);
         }
+
+#if DUMMY_TEST
+        {
+            solution dummySolution;
+            dummySolution.nonce = 0;
+            std::lock_guard<std::mutex> validLock(gValidSolLock);
+            gSubmittingSolutionsVec.push_back(dummySolution);
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));  // Wait 10ms
+        }
+#endif
+
     }
 
     randomx_destroy_vm(vm);
     randomx_release_cache(cache);
 }
 
-void listenerThread(char* nodeIp)
+void listenerThread(const char* nodeIp)
 {
     QCPtr qc;
     bool needReconnect = true;
@@ -291,6 +443,7 @@ void listenerThread(char* nodeIp)
                     printf("%s", debug_log.c_str());
                 }
                 // TODO: help relaying the messages to connected peers
+
             }
             fflush(stdout);
         }
@@ -304,16 +457,79 @@ void listenerThread(char* nodeIp)
     }
 }
 
+std::vector<std::string> split(const std::string& s, char delimiter) {
+    std::vector<std::string> result;
+    std::stringstream ss(s);
+    std::string item;
+    while (getline(ss, item, delimiter)) {
+        result.push_back(item);
+    }
+    return result;
+}
+
+void printHelp()
+{
+    printf("./oc_verifier -seed [OPERATOR SEED] -nodeip [OPERATOR node ip] -peers [nodeip0],[nodeip1], ... ,[nodeipN]\n");
+}
+
 int run(int argc, char *argv[]) {
     if (argc == 1) {
-        printf("./oc_verifier [nodeip0] [nodeip1] ... [nodeipN]\n");
+        printHelp();
         return 0;
     }
+
+    std::string seed, operatorIp;
+    std::vector<std::string> peers;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+
+        if (arg == "--seed")
+        {
+            seed = argv[++i];
+        }
+        else if(arg == "--nodeip")
+        {
+            operatorIp = argv[++i];
+        }
+        else if (arg == "--peers")
+        {
+            std::string peerList = argv[++i];
+            peers = split(peerList, ' ');
+        }
+        else if (arg == "--help")
+        {
+            printHelp();
+            return 0;
+        }
+        else
+        {
+            printHelp();
+            return 1;
+        }
+    }
+
+    // Print parsed values
+    if (!seed.empty())
+    {
+        memcpy(operatorSeed, seed.c_str(), 56);
+        std::cout << "Seed: " << operatorSeed << std::endl;
+        getKey();
+    }
+    std::cout << "OperatorID: " << operatorPublicIdentity << "\n";
+    std::cout << "Node IP: " << operatorIp << "\n";
+    std::cout << "Peers: ";
+    for (const auto& peer : peers)
+    {
+        std::cout << peer << ", ";
+    }
+    std::cout << std::endl;
+
     getPublicKeyFromIdentity(DISPATCHER, dispatcherPubkey);
     std::vector<std::thread> thr;
-    for (int i = 0; i < argc - 1; i++)
+    for (size_t i = 0; i < peers.size(); i++)
     {
-        thr.push_back(std::thread(listenerThread, argv[1+i]));
+        thr.push_back(std::thread(listenerThread, peers[i].c_str()));
     }
 
     std::thread verify_thr[XMR_VERIFY_THREAD];
@@ -322,10 +538,16 @@ int run(int argc, char *argv[]) {
         verify_thr[i] = std::thread(verifyThread);
     }
 
+    std::shared_ptr<std::thread> submit_thr;
+    if (!seed.empty())
+    {
+        submit_thr = std::make_shared<std::thread>(sendVerifiedSolution, operatorIp.c_str());
+    }
+
     SLEEP(3000);
     while (!shouldExit)
     {
-        printf("Active peer: %d | Valid: %lu | Invalid: %lu | Stale: %lu\n", nPeer.load(), gValid.load(), gInValid.load(), gStale.load());
+        printf("Active peer: %d | Valid: %lu | Invalid: %lu | Stale: %lu | Submit: %lu\n", nPeer.load(), gValid.load(), gInValid.load(), gStale.load(), gSubmittedSols.load());
         SLEEP(10000);
     }
 
