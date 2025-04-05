@@ -22,6 +22,8 @@ uint8_t operatorSubSeed[32]= {0};
 uint8_t operatorPrivateKey[32]= {0};
 char operatorPublicIdentity[128] = {0};
 #define CUSTOM_MINING_SOLUTION_VERIFICATION_MESSAGE_TYPE 55
+#define CUSTOM_MINING_TASK_REQUEST_MESSAGE_TYPE 56
+#define CUSTOM_MINING_TASK_RESPOND_MESSAGE_TYPE 57
 
 #define DUMMY_TEST 0
 
@@ -76,6 +78,34 @@ struct VerifiedSolution
     uint8_t signature[64];
 };
 
+struct RequestedCustomMiningTask
+{
+    uint64_t fromTaskIndex;
+    uint8_t signature[64];
+};
+
+constexpr uint64_t taskSizeWithoutSignatures = 480;
+constexpr uint64_t solutionSizeWithoutSignatures = 48;
+static constexpr int _maxNumberOfTasks = 8;
+static constexpr int _maxNumberSolutions = 8;
+
+struct RespondCustomMiningData
+{
+    enum
+    {
+        type = 57,
+    };
+    unsigned long long _taskCount;
+    unsigned long long _maxTaskCount;
+
+    unsigned long long _solutionsCount;
+    unsigned long long _maxSolutionsCount;
+
+    uint8_t _task[_maxNumberOfTasks * taskSizeWithoutSignatures];
+    uint8_t _solutions[_maxNumberSolutions * solutionSizeWithoutSignatures];
+};
+
+
 
 // simple poc design and queue, need better design to have higher precision
 std::mutex taskLock;
@@ -92,6 +122,8 @@ std::atomic<int> nPeer;
 std::mutex gValidSolLock;
 std::vector<solution> gSubmittingSolutionsVec;
 std::atomic<uint64_t> gSubmittedSols(0);
+
+#define OPERATOR_NODE_TASK_INDEX_OFFSET_MS 5000
 
 #define XMR_NONCE_POS 39
 #define XMR_VERIFY_THREAD 4
@@ -457,6 +489,190 @@ void listenerThread(const char* nodeIp)
     }
 }
 
+void requestCustomMiningDataFromOperatorNode(QCPtr pConnection)
+{
+    std::string log_header = "[OPERATOR]: ";
+
+    // Get the task from current time stamp
+    auto now = std::chrono::system_clock::now();
+    auto duration = now.time_since_epoch();
+    auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+
+    // Offset by OPERATOR_NODE_TASK_INDEX_OFFSET_MS ms
+    int64_t initTaskIndex = milliseconds - OPERATOR_NODE_TASK_INDEX_OFFSET_MS;
+
+    bool needToRequestNewSol = true;
+    RequestedCustomMiningTask requestTask;
+    requestTask.fromTaskIndex = initTaskIndex;
+
+    if (needToRequestNewSol)
+    {
+        struct {
+            RequestResponseHeader header;
+            RequestedCustomMiningTask requestTask;
+        } packet;
+
+        // Header
+        packet.header.setSize(sizeof(packet));
+        packet.header.randomizeDejavu();
+        packet.header.setType(CUSTOM_MINING_TASK_REQUEST_MESSAGE_TYPE);
+
+        packet.requestTask = requestTask;
+
+        // Sign the message
+        uint8_t digest[32] = {0};
+        uint8_t signature[64] = {0};
+        KangarooTwelve(
+            (unsigned char*)&packet.requestTask,
+            sizeof(packet.requestTask) - 64,
+            digest,
+            32);
+        sign(operatorSubSeed, operatorPublicKey, digest, signature);
+        memcpy(packet.requestTask.signature, signature, 64);
+
+        // Send data
+        int dataSent = pConnection->sendData((uint8_t*)&packet, sizeof(packet));
+
+        // Send successfull. Get the list of customming data
+        if (dataSent > 0)
+        {
+            struct {
+                RequestResponseHeader header;
+                RespondCustomMiningData respondData;
+            } receivedPacket;
+
+            int dataRecv = pConnection->receiveData((uint8_t*)&receivedPacket, sizeof(receivedPacket));
+            if (dataRecv > 0)
+            {
+                //std::cout << "\nRecevie data " << (int)receivedPacket.header.type() << std::endl << std::flush;
+                if (receivedPacket.header.type() == CUSTOM_MINING_TASK_RESPOND_MESSAGE_TYPE)
+                {
+                    unsigned long long numberOfTasks = receivedPacket.respondData._taskCount;
+                    // No task from the time point
+                    if (numberOfTasks > 0)
+                    {
+                        // Get the latest task
+                        task latestTask;
+                        // Remove the offset of source, dest public key and gamming nonce
+                        memcpy((char*)&latestTask + 32 * 3, receivedPacket.respondData._task + taskSizeWithoutSignatures * (numberOfTasks - 1), taskSizeWithoutSignatures);
+
+                        task* tk = &latestTask;
+                        bool newTask = true;
+                        {
+                            std::lock_guard<std::mutex> glock(taskLock);
+                            if (currentTask.taskIndex <  tk->taskIndex)
+                            {
+                                currentTask = *tk;
+                            }
+                            else // older task, no need to process
+                            {
+                                newTask = false;
+                            }
+                        }
+                        if (newTask)
+                        {
+                            uint64_t delta = 0;
+                            int64_t delta_local = 0;
+                            {
+                                auto now = std::chrono::system_clock::now();
+                                // Convert the time point to milliseconds since the epoch (Unix timestamp)
+                                auto duration = now.time_since_epoch();
+                                auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+                                delta_local = (int64_t)(tk->taskIndex) - (int64_t)(milliseconds);
+                            }
+                            if (prevTask)
+                            {
+                                delta = (tk->taskIndex - prevTask);
+                            }
+
+                            prevTask = tk->taskIndex;
+                            char dbg[256] = {0};
+                            std::string debug_log = log_header;
+                            sprintf(dbg, "Received task index %lu (d_prev: %lu ms) (d_local: %ld ms): ", tk->taskIndex, delta, delta_local);
+                            debug_log += std::string(dbg); memset(dbg, 0, sizeof(dbg));
+                            int blobSz = tk->m_size;
+                            for (int i = 0; i < 4; i++)
+                            {
+                                char hex[8] = {0};
+                                byteToHex(tk->m_blob + i, hex, 1);
+                                debug_log += std::string(hex);
+                            }
+                            debug_log += "...";
+                            for (int i = blobSz - 4; i < blobSz; i++)
+                            {
+                                char hex[8] = {0};
+                                byteToHex(tk->m_blob + i, hex, 1);
+                                debug_log += std::string(hex);
+                            }
+
+                            sprintf(dbg, " | diff %llu", 0xffffffffffffffffULL/tk->m_target);
+                            debug_log += std::string(dbg); memset(dbg, 0, sizeof(dbg));
+                            sprintf(dbg, " | height %lu\n", tk->m_height);
+                            debug_log += std::string(dbg); memset(dbg, 0, sizeof(dbg));
+                            printf("%s", debug_log.c_str());
+                        }
+                    }
+
+                    // Check if there is any solution data
+                    unsigned long long numberOfSolutions = receivedPacket.respondData._solutionsCount;
+                    if (numberOfSolutions > 0)
+                    {
+                        solution share;
+                        for (int k = 0; k < numberOfSolutions; k++)
+                        {
+                            // Remove the offset of source, dest public key and gamming nonce
+                            memcpy((char*)&share + 32 * 3, receivedPacket.respondData._solutions + solutionSizeWithoutSignatures * k, solutionSizeWithoutSignatures);
+                            {
+                                std::lock_guard<std::mutex> slock(solLock);
+                                auto p = std::make_pair(share._taskIndex, share.nonce);
+                                if (mTaskNonce.find(p) == mTaskNonce.end())
+                                {
+                                    mTaskNonce[p] = true;
+                                    qSol.push(share);
+                                }
+                            }
+                        }
+                    }
+
+                }
+            }
+        }
+    }
+
+}
+
+void operatorListenerThread(const char* nodeIp)
+{
+    QCPtr qc;
+    bool needReconnect = true;
+    std::string log_header = "[" + std::string(nodeIp) + "]: ";
+    while (!shouldExit)
+    {
+        try {
+            if (needReconnect)
+            {
+                needReconnect = false;
+                qc = make_qc(nodeIp, OPERATOR_PORT);
+                nPeer.fetch_add(1);
+                //qc->exchangePeer();// do the handshake stuff
+                printf("%sConnected OPERATOR node %s\n", log_header.c_str(), nodeIp);
+            }
+
+            requestCustomMiningDataFromOperatorNode(qc);
+
+            SLEEP(500);
+        }
+        catch (std::logic_error &ex) {
+            printf("%s\n", ex.what());
+            fflush(stdout);
+            needReconnect = true;
+            nPeer.fetch_add(-1);
+            SLEEP(1000);
+        }
+    }
+}
+
+
 std::vector<std::string> split(const std::string& s, char delimiter) {
     std::vector<std::string> result;
     std::stringstream ss(s);
@@ -469,7 +685,6 @@ std::vector<std::string> split(const std::string& s, char delimiter) {
 
 void printHelp()
 {
-    printf("./oc_verifier -seed [OPERATOR SEED] -nodeip [OPERATOR node ip] -peers [nodeip0],[nodeip1], ... ,[nodeipN]\n");
 }
 
 int run(int argc, char *argv[]) {
@@ -480,22 +695,28 @@ int run(int argc, char *argv[]) {
 
     std::string seed, operatorIp;
     std::vector<std::string> peers;
+    bool listenFromPeers = false;
+    bool submitSolution = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-
-        if (arg == "--seed")
+        if (arg == "--listen")
+        {
+            listenFromPeers = true;
+            std::string peerList = argv[++i];
+            peers = split(peerList, ',');
+        }
+        if (arg == "--submit")
+        {
+            submitSolution = true;
+        }
+        else if (arg == "--seed")
         {
             seed = argv[++i];
         }
         else if(arg == "--nodeip")
         {
             operatorIp = argv[++i];
-        }
-        else if (arg == "--peers")
-        {
-            std::string peerList = argv[++i];
-            peers = split(peerList, ' ');
         }
         else if (arg == "--help")
         {
@@ -526,22 +747,57 @@ int run(int argc, char *argv[]) {
     std::cout << std::endl;
 
     getPublicKeyFromIdentity(DISPATCHER, dispatcherPubkey);
-    std::vector<std::thread> thr;
-    for (size_t i = 0; i < peers.size(); i++)
+
+    currentTask.taskIndex = 0;
+
+    // Actively request XMR task from node with operator id
+    std::shared_ptr<std::thread> operatorTaskThread;
     {
-        thr.push_back(std::thread(listenerThread, peers[i].c_str()));
+        if (!seed.empty() || !operatorIp.empty())
+        {
+            operatorTaskThread = std::make_shared<std::thread>(operatorListenerThread, operatorIp.c_str());
+        }
+        else
+        {
+            std::cout << "Will not get XMR task from operator node, "
+                << ", seed: " << seed
+                << ", operatorIP: " << operatorIp
+                << std::endl;
+        }
     }
 
+    // Listen for XMR task from peers
+    std::vector<std::thread> thr;
+    if (listenFromPeers)
+    {
+        for (size_t i = 0; i < peers.size(); i++)
+        {
+            thr.push_back(std::thread(listenerThread, peers[i].c_str()));
+        }
+    }
+
+    // Solution verification
     std::thread verify_thr[XMR_VERIFY_THREAD];
     for (int i = 0; i < XMR_VERIFY_THREAD; i++)
     {
         verify_thr[i] = std::thread(verifyThread);
     }
 
+    // Submit verified solution back to node with operator id
     std::shared_ptr<std::thread> submit_thr;
-    if (!seed.empty())
+    if (submitSolution)
     {
-        submit_thr = std::make_shared<std::thread>(sendVerifiedSolution, operatorIp.c_str());
+        if (!seed.empty() || !operatorIp.empty())
+        {
+            submit_thr = std::make_shared<std::thread>(sendVerifiedSolution, operatorIp.c_str());
+        }
+        else
+        {
+            std::cout << "Will not submit the verified solution, "
+                << ", seed: " << seed
+                << ", operatorIP: " << operatorIp
+                << std::endl;
+        }
     }
 
     SLEEP(3000);

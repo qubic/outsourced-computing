@@ -29,7 +29,7 @@ The POC is junked into 5 Phases.
 2. Connect Qubic Messaging with Monero (Bridging)✅
 3. End-To-End Messaging (including signaling and real monero tasks) ⌛
 4. Solution Validation (Oracle) and Revenue Calculation ⏳
-5. Go-Live 
+5. Go-Live
 
 ## The Principle
 For the POC we need high speed delivery of tasks and solutions. We will build on top of the [Qubic Broadcast Message](https://github.com/qubic/core/blob/main/src/network_messages/broadcast_message.h) to achieve this.
@@ -90,9 +90,24 @@ struct
     unsigned int nonce;         // xmrig::JobResult.nonce
     unsigned int padding;       // reserve for future use
     unsigned char result[32];   // xmrig::JobResult.result
-    
+
     unsigned char signature[64];
 } solution;
+```
+
+**The Verified Solution struct**
+```c++
+struct
+{
+    unsigned int sizeAndType;
+    unsigned int dejavu;
+
+    unsigned long long taskIndex;
+    unsigned int nonce;         // xmrig::JobResult.nonce
+    unsigned int padding;       // reserve for future use
+
+    unsigned char signature[64];
+} verifiedSolution;
 ```
 
 >[!CAUTION]
@@ -121,4 +136,11 @@ If you have found a solution, pack it into the solution struct.
 - `result` must be the result from xmrig::JobResult.result
 
 Sign your solution packet with your computor seed. make the `dejavu = 0` to allow propagation of your solution in the network.
+
+### How to send back a verifed solution?
+It is similar to the SPECIAL_COMMAND, run your verification code or use the one in verifier folder. Pack your verified solution with OPERATOR signature
+
+- `taskIndex` must be the task indes from recevied task
+- `nonce` must be the xmrig::JobResult.nonce and equal to a `value` such that `value % 676 == computorIndex`
+- `signature` sign with your OPERATOR signature
 
