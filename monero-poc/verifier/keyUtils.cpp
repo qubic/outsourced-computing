@@ -46,3 +46,29 @@ void getPublicKeyFromIdentity(const char* identity, uint8_t* publicKey)
     }
     memcpy(publicKey, publicKeyBuffer, 32);
 }
+
+bool getSubseedFromSeed(const unsigned char* seed, unsigned char* subseed)
+{
+    unsigned char seedBytes[55];
+    for (int i = 0; i < 55; i++)
+    {
+        if (seed[i] < 'a' || seed[i] > 'z')
+        {
+            return false;
+        }
+        seedBytes[i] = seed[i] - 'a';
+    }
+    KangarooTwelve(seedBytes, sizeof(seedBytes), subseed, 32);
+
+    return true;
+}
+void getPrivateKeyFromSubSeed(const unsigned char* seed, unsigned char* privateKey)
+{
+    KangarooTwelve(seed, 32, privateKey, 32);
+}
+void getPublicKeyFromPrivateKey(const unsigned char* privateKey, unsigned char* publicKey)
+{
+    point_t P;
+    ecc_mul_fixed((unsigned long long*)privateKey, P); // Compute public key
+    encode(P, publicKey);
+}
