@@ -475,7 +475,7 @@ std::vector<std::string> split(const std::string& s, char delimiter) {
 
 void printHelp()
 {
-    printf("./oc_verifier -seed [OPERATOR SEED] -nodeip [OPERATOR node ip] -peers [nodeip0],[nodeip1], ... ,[nodeipN]\n");
+    printf("./oc_verifier --seed [OPERATOR SEED] --nodeip [OPERATOR node ip] --peers [nodeip0],[nodeip1], ... ,[nodeipN]\n");
 }
 
 int run(int argc, char *argv[]) {
@@ -501,7 +501,7 @@ int run(int argc, char *argv[]) {
         else if (arg == "--peers")
         {
             std::string peerList = argv[++i];
-            peers = split(peerList, ' ');
+            peers = split(peerList, ',');
         }
         else if (arg == "--help")
         {
