@@ -104,11 +104,11 @@ void getKey()
     getIdentityFromPublicKey(operatorPublicKey, operatorPublicIdentity, false);
 }
 
-void sendSol(QCPtr pConnection)
+bool sendSol(QCPtr pConnection)
 {
+    bool haveValidSolsToSubmited = false;
     solution validSol;
     {
-        bool haveValidSolsToSubmited = false;
         {
             std::lock_guard<std::mutex> validLock(gValidSolLock);
             if (!gSubmittingSolutionsVec.empty())
@@ -165,6 +165,7 @@ void sendSol(QCPtr pConnection)
             }
         }
     }
+    return haveValidSolsToSubmited;
 }
 
 void sendVerifiedSolution(const char* nodeIp)
@@ -182,7 +183,12 @@ void sendVerifiedSolution(const char* nodeIp)
                 qc->exchangePeer();// do the handshake stuff
                 printf("%sConnected OPERATOR node %s\n", log_header.c_str(), nodeIp);
             }
-            sendSol(qc);
+
+            bool haveValidSolsToSubmited = sendSol(qc);
+            if (!haveValidSolsToSubmited)
+            {
+                SLEEP(1000);
+            }
         }
         catch (std::logic_error &ex) {
             printf("%s\n", ex.what());
