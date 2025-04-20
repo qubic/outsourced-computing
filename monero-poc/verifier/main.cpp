@@ -25,6 +25,7 @@ char operatorPublicIdentity[128] = {0};
 
 #define DUMMY_TEST 0
 
+
 #if DUMMY_TEST
 #define OPERATOR_PORT 31841
 #else
@@ -74,6 +75,19 @@ struct VerifiedSolution
     uint32_t padding;
 
     uint8_t signature[64];
+};
+
+struct XMRTask
+{
+    uint64_t taskIndex; // ever increasing number (unix timestamp in ms)
+
+    uint8_t m_blob[408]; // Job data from pool
+    uint64_t m_size;  // length of the blob
+    uint64_t m_target; // Pool difficulty
+    uint64_t m_height; // Block height
+    uint8_t m_seed[32]; // Seed hash for XMR
+
+    unsigned int extraNonce;
 };
 
 
@@ -463,6 +477,201 @@ void listenerThread(const char* nodeIp)
     }
 }
 
+struct RequestedCustomMiningData
+{
+    enum
+    {
+        type = 55,
+    };
+    enum
+    {
+        taskType = 0,
+        solutionType = 1,
+    };
+
+    unsigned long long fromTaskIndex;
+    unsigned long long toTaskIndex;
+    unsigned int dataType;
+};
+
+struct RespondCustomMiningData
+{
+    enum
+    {
+        type = 56,
+    };
+    enum
+    {
+        taskType = 0,
+        solutionType = 1,
+    };
+};
+
+
+struct CustomMiningRespondDataHeader
+{
+    unsigned long long itemCount;       // size of the data
+    unsigned long long itemSize;        // size of the data
+    unsigned long long fromTimeStamp;   // start of the ts
+    unsigned long long toTimeStamp;     // end of the ts
+    unsigned long long respondType;   // message type
+};
+
+constexpr int64_t OFFSET_TIME_STAMP_IN_MS = 500;
+
+template <typename T>
+void printTaskInfo(T* tk, std::string logHeader)
+{
+    uint64_t delta = 0;
+    int64_t delta_local = 0;
+    {
+        auto now = std::chrono::system_clock::now();
+        // Convert the time point to milliseconds since the epoch (Unix timestamp)
+        auto duration = now.time_since_epoch();
+        auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+        delta_local = (int64_t)(tk->taskIndex) - (int64_t)(milliseconds);
+    }
+    // if (prevTask)
+    // {
+    //     delta = (tk->taskIndex - prevTask);
+    // }
+    // prevTask = tk->taskIndex;
+    char dbg[256] = {0};
+    std::string debug_log = logHeader;
+    sprintf(dbg, "Received task index %lu (d_prev: %lu ms) (d_local: %lu ms): ", tk->taskIndex, delta, delta_local);
+    debug_log += std::string(dbg); memset(dbg, 0, sizeof(dbg));
+    int blobSz = tk->m_size;
+    for (int i = 0; i < 4; i++)
+    {
+        char hex[8] = {0};
+        byteToHex(tk->m_blob + i, hex, 1);
+        debug_log += std::string(hex);
+    }
+    debug_log += "...";
+    for (int i = blobSz - 4; i < blobSz; i++)
+    {
+        char hex[8] = {0};
+        byteToHex(tk->m_blob + i, hex, 1);
+        debug_log += std::string(hex);
+    }
+
+    sprintf(dbg, " | diff %llu", 0xffffffffffffffffULL/tk->m_target);
+    debug_log += std::string(dbg); memset(dbg, 0, sizeof(dbg));
+    sprintf(dbg, " | height %lu\n", tk->m_height);
+    debug_log += std::string(dbg); memset(dbg, 0, sizeof(dbg));
+    printf("%s", debug_log.c_str());
+}
+
+static uint64_t lastTaskTimeStamp = 0;
+
+bool fetchCustomMiningData(QCPtr pConnection, const char* logHeader)
+{
+    bool haveCustomMiningData = false;
+    struct {
+        RequestResponseHeader header;
+        RequestedCustomMiningData requestData;
+        unsigned char signature[SIGNATURE_SIZE];
+    } packet;
+
+    packet.header.setSize(sizeof(packet));
+    packet.header.randomizeDejavu();
+    packet.header.setType(RequestedCustomMiningData::type);
+
+    uint64_t fromTaskIndex = lastTaskTimeStamp;// - OFFSET_TIME_STAMP_IN_MS;
+    uint64_t toTaskIndex = 0; // Fetch all the task
+    packet.requestData.dataType = RequestedCustomMiningData::taskType;
+    packet.requestData.fromTaskIndex = fromTaskIndex;
+    packet.requestData.toTaskIndex = toTaskIndex;
+
+    // Sign the message
+    uint8_t digest[32] = {0};
+    uint8_t signature[64] = {0};
+    KangarooTwelve(
+        (unsigned char*)&packet.requestData,
+        sizeof(RequestedCustomMiningData),
+        digest,
+        32);
+    sign(operatorSubSeed, operatorPublicKey, digest, signature);
+    memcpy(packet.signature, signature, 64);
+
+    // Send request all task
+    int dataSent = pConnection->sendData((uint8_t*)&packet, sizeof(packet));
+    if (dataSent > 0)
+    {
+        // Get the task
+        RequestResponseHeader respond_header = pConnection->receiveHeader();
+        // Verified the message
+        if (respond_header.type() == RespondCustomMiningData::type)
+        {
+            if (respond_header.size() > sizeof(RequestResponseHeader))
+            {
+                unsigned int dataSize = respond_header.size() - sizeof(RequestResponseHeader);
+                std::vector<unsigned char> dataBuffer(dataSize);
+                unsigned char* pData = &dataBuffer[0];
+                unsigned int receivedSize = pConnection->receiveData(pData, dataSize);
+
+                CustomMiningRespondDataHeader respondDataHeader = *(CustomMiningRespondDataHeader*)pData;
+                if (respondDataHeader.itemCount > 0)
+                {
+                    std::vector<XMRTask> taskVec;
+                    pData += sizeof(CustomMiningRespondDataHeader);
+                    unsigned char* task = pData;
+                    for (int i = 0; i < respondDataHeader.itemCount; i++, task += sizeof(XMRTask))
+                    {
+                        XMRTask rawTask = *(XMRTask*)pData;
+                        taskVec.push_back(rawTask);
+                        printTaskInfo<XMRTask>(&rawTask, logHeader);
+                    }
+                    haveCustomMiningData = true;
+
+                    // Update the last time stamp
+                    {
+                        lastTaskTimeStamp = taskVec.rbegin()->taskIndex + 1;
+                    }
+                }
+            }
+        }
+    }
+
+    return haveCustomMiningData;
+}
+
+void operatorFetcherThread(const char* nodeIp)
+{
+    QCPtr qc;
+    bool needReconnect = true;
+    std::string log_header = "[OP:" + std::string(nodeIp) + "]: ";
+    while (!shouldExit)
+    {
+        try {
+            if (needReconnect)
+            {
+                needReconnect = false;
+                qc = make_qc(nodeIp, OPERATOR_PORT);
+                printf("%sConnected OPERATOR node %s\n", log_header.c_str(), nodeIp);
+                nPeer.fetch_add(1);
+            }
+
+            bool haveCustomMiningData = fetchCustomMiningData(qc, log_header.c_str());
+            if (!haveCustomMiningData)
+            {
+                SLEEP(1000);
+            }
+            else
+            {
+                SLEEP(50000);
+            }
+        }
+        catch (std::logic_error &ex) {
+            printf("%s\n", ex.what());
+            fflush(stdout);
+            needReconnect = true;
+            nPeer.fetch_add(-1);;
+            SLEEP(1000);
+        }
+    }
+}
+
 std::vector<std::string> split(const std::string& s, char delimiter) {
     std::vector<std::string> result;
     std::stringstream ss(s);
@@ -533,9 +742,21 @@ int run(int argc, char *argv[]) {
 
     getPublicKeyFromIdentity(DISPATCHER, dispatcherPubkey);
     std::vector<std::thread> thr;
-    for (size_t i = 0; i < peers.size(); i++)
+
+    // Fetch task from peers
+    if (peers.size() > 0)
     {
-        thr.push_back(std::thread(listenerThread, peers[i].c_str()));
+        for (size_t i = 0; i < peers.size(); i++)
+        {
+            thr.push_back(std::thread(listenerThread, peers[i].c_str()));
+        }
+    }
+
+    // Fetch tasks from node ip
+    std::shared_ptr<std::thread> operator_thread;
+    if (!seed.empty() && !operatorIp.empty())
+    {
+        operator_thread = std::make_shared<std::thread>(operatorFetcherThread, operatorIp.c_str());
     }
 
     std::thread verify_thr[XMR_VERIFY_THREAD];
