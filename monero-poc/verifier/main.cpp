@@ -21,16 +21,17 @@ uint8_t operatorPublicKey[32] = {0};
 uint8_t operatorSubSeed[32]= {0};
 uint8_t operatorPrivateKey[32]= {0};
 char operatorPublicIdentity[128] = {0};
-#define CUSTOM_MINING_SOLUTION_VERIFICATION_MESSAGE_TYPE 55
 
 #define DUMMY_TEST 0
+std::mutex gDummyLock;
+unsigned long long gDummyCounter = 0;
 
 
-#if DUMMY_TEST
-#define OPERATOR_PORT 31841
-#else
-#define OPERATOR_PORT 21841
-#endif
+// #if DUMMY_TEST
+// #define OPERATOR_PORT 31841
+// #else
+ #define OPERATOR_PORT 21841
+// #endif
 
 
 #define PORT 21841
@@ -67,16 +68,6 @@ struct solution
     uint8_t signature[64];
 } ;
 
-struct VerifiedSolution
-{
-    uint64_t everIncreasingNonceAndCommandType;
-    uint64_t taskIndex;
-    uint32_t nonce;
-    uint32_t padding;
-
-    uint8_t signature[64];
-};
-
 struct XMRTask
 {
     uint64_t taskIndex; // ever increasing number (unix timestamp in ms)
@@ -88,6 +79,90 @@ struct XMRTask
     uint8_t m_seed[32]; // Seed hash for XMR
 
     unsigned int extraNonce;
+
+    task convertToTask()
+    {
+        task tk;
+
+        tk.taskIndex = taskIndex;
+        memcpy(tk.m_blob, m_blob, 408);
+        tk.m_size = m_size;
+        tk.m_target = m_target;
+        tk.m_height = m_height;
+        memcpy(tk.m_seed, m_seed, 32);
+        return tk;
+    }
+};
+
+struct XMRSolution
+{
+    uint64_t taskIndex;
+    uint32_t nonce;         // xmrig::JobResult.nonce
+    uint32_t padding;       // reserve for future use
+    uint8_t result[32];     // xmrig::JobResult.result
+
+    solution convertToSol()
+    {
+        solution sol;
+        sol._taskIndex = taskIndex;
+        sol.nonce = nonce;
+        sol.padding = padding;
+        memcpy(sol.result, result, 32);
+        return sol;
+    }
+};
+
+
+struct RequestedCustomMiningData
+{
+    enum
+    {
+        type = 55,
+    };
+    enum
+    {
+        taskType = 0,
+        solutionType = 1,
+    };
+
+    unsigned long long fromTaskIndex;
+    unsigned long long toTaskIndex;
+    unsigned int dataType;
+};
+
+struct RespondCustomMiningData
+{
+    enum
+    {
+        type = 60,
+    };
+    enum
+    {
+        taskType = 0,
+        solutionType = 1,
+    };
+};
+
+struct RequestedCustomMiningSolutionVerification
+{
+    enum
+    {
+        type = 61,
+    };
+    unsigned long long taskIndex;
+    unsigned int nonce; // nonce of invalid solution
+    unsigned int padding;
+    unsigned char isValid; // validity of the solution
+};
+
+
+struct CustomMiningRespondDataHeader
+{
+    unsigned long long itemCount;       // size of the data
+    unsigned long long itemSize;        // size of the data
+    unsigned long long fromTimeStamp;   // start of the ts
+    unsigned long long toTimeStamp;     // end of the ts
+    unsigned long long respondType;   // message type
 };
 
 
@@ -104,8 +179,10 @@ std::atomic<uint64_t> gValid;
 std::atomic<int> nPeer;
 
 std::mutex gValidSolLock;
-std::vector<solution> gSubmittingSolutionsVec;
+std::vector<RequestedCustomMiningSolutionVerification> gReportedSolutionsVec;
 std::atomic<uint64_t> gSubmittedSols(0);
+std::map<uint64_t, XMRTask> nodeTasks; // Task that fetching from node
+std::map<uint64_t, std::vector<XMRSolution>> nodeSolutions; // Solutions that fetching from node
 
 #define XMR_NONCE_POS 39
 #define XMR_VERIFY_THREAD 4
@@ -118,71 +195,67 @@ void getKey()
     getIdentityFromPublicKey(operatorPublicKey, operatorPublicIdentity, false);
 }
 
-bool sendSol(QCPtr pConnection)
+bool reportVerifiedSol(QCPtr pConnection)
 {
-    bool haveValidSolsToSubmited = false;
-    solution validSol;
+    bool haveSolsToReport = false;
+    RequestedCustomMiningSolutionVerification verifiedSol;
     {
         {
             std::lock_guard<std::mutex> validLock(gValidSolLock);
-            if (!gSubmittingSolutionsVec.empty())
+            if (!gReportedSolutionsVec.empty())
             {
-                validSol = gSubmittingSolutionsVec.front();
-                haveValidSolsToSubmited = true;
+                verifiedSol = gReportedSolutionsVec.front();
+                haveSolsToReport = true;
             }
         }
 
-        // Submit the validated solutions. Make sure the solution not come from owned computor ID
-        if (haveValidSolsToSubmited)
+        // Submit the validated solutions
+        if (haveSolsToReport)
         {
             struct {
                 RequestResponseHeader header;
-                VerifiedSolution verifiedSol;
+                RequestedCustomMiningSolutionVerification verifiedSol;
+                uint8_t signature[SIGNATURE_SIZE];
             } packet;
 
             // Header
             packet.header.setSize(sizeof(packet));
             packet.header.randomizeDejavu();
-            packet.header.setType(CUSTOM_MINING_SOLUTION_VERIFICATION_MESSAGE_TYPE);
-            uint64_t curTime = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-            uint64_t commandByte = (uint64_t)(CUSTOM_MINING_SOLUTION_VERIFICATION_MESSAGE_TYPE) << 56;
-            packet.verifiedSol.everIncreasingNonceAndCommandType = commandByte | curTime;
+            packet.header.setType(RequestedCustomMiningSolutionVerification::type);
 
             // Payload
-            packet.verifiedSol.taskIndex = validSol._taskIndex;
-            packet.verifiedSol.nonce = validSol.nonce;
-            packet.verifiedSol.padding = validSol.padding;
+            packet.verifiedSol = verifiedSol;
 
             // Sign the message
             uint8_t digest[32] = {0};
             uint8_t signature[64] = {0};
             KangarooTwelve(
                 (unsigned char*)&packet.verifiedSol,
-                sizeof(packet.verifiedSol) - 64,
+                sizeof(packet.verifiedSol),
                 digest,
                 32);
             sign(operatorSubSeed, operatorPublicKey, digest, signature);
-            memcpy(packet.verifiedSol.signature, signature, 64);
+            memcpy(packet.signature, signature, 64);
 
             // Send data
             int dataSent = pConnection->sendData((uint8_t*)&packet, sizeof(packet));
 
-            // Send successfull, erase it from the valid queue
+            // Send successfull, erase it from the invalid queue
             if (dataSent > 0)
             {
                 std::lock_guard<std::mutex> validLock(gValidSolLock);
-                if (!gSubmittingSolutionsVec.empty())
+                if (!gReportedSolutionsVec.empty())
                 {
-                    gSubmittingSolutionsVec.erase(gSubmittingSolutionsVec.begin());
+                    gReportedSolutionsVec.erase(gReportedSolutionsVec.begin());
                     gSubmittedSols.fetch_add(1);
                 }
             }
         }
     }
-    return haveValidSolsToSubmited;
+    return haveSolsToReport;
 }
 
-void sendVerifiedSolution(const char* nodeIp)
+void submitVerifiedSolution(const char* nodeIp)
 {
     QCPtr qc;
     bool needReconnect = true;
@@ -198,8 +271,8 @@ void sendVerifiedSolution(const char* nodeIp)
                 printf("%sConnected OPERATOR node %s\n", log_header.c_str(), nodeIp);
             }
 
-            bool haveValidSolsToSubmited = sendSol(qc);
-            if (!haveValidSolsToSubmited)
+            bool haveSolsToSubmited = reportVerifiedSol(qc);
+            if (!haveSolsToSubmited)
             {
                 SLEEP(1000);
             }
@@ -213,6 +286,7 @@ void sendVerifiedSolution(const char* nodeIp)
         }
     }
 }
+
 
 void verifyThread()
 {
@@ -287,42 +361,34 @@ void verifyThread()
             uint64_t v = ((uint64_t*)out)[3];
             char hex[64];
             byteToHex(out, hex, 32);
+
+            RequestedCustomMiningSolutionVerification verifedSol;
+            verifedSol.nonce = candidate.nonce;
+            verifedSol.taskIndex = local_task.taskIndex;
+            verifedSol.padding = candidate.padding;
+
             if (v < local_task.m_target)
             {
+                verifedSol.isValid = 1;
                 gValid.fetch_add(1);
-
-                // Save the solution for submiting to node
-#if !DUMMY_TEST
-                {
-                    std::lock_guard<std::mutex> validLock(gValidSolLock);
-                    gSubmittingSolutionsVec.push_back(candidate);
-                }
-#endif
                 printf("Valid Share from comp %d: %s\n", nonce % 676, hex);
-
             }
             else
             {
+                // Save the solution for sending to node this is an invalidate solutions
+                {
+                    std::lock_guard<std::mutex> validLock(gValidSolLock);
+                    verifedSol.isValid = 0;
+                }
                 gInValid.fetch_add(1);
                 printf("Invalid Share from comp %d: %s\n", nonce % 676, hex);
             }
+            gReportedSolutionsVec.push_back(verifedSol);
         }
         else
         {
             SLEEP(100);
         }
-
-#if DUMMY_TEST
-        {
-            solution dummySolution;
-            dummySolution.nonce = 0;
-            std::lock_guard<std::mutex> validLock(gValidSolLock);
-            gSubmittingSolutionsVec.push_back(dummySolution);
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));  // Wait 10ms
-        }
-#endif
-
     }
 
     randomx_destroy_vm(vm);
@@ -477,47 +543,7 @@ void listenerThread(const char* nodeIp)
     }
 }
 
-struct RequestedCustomMiningData
-{
-    enum
-    {
-        type = 55,
-    };
-    enum
-    {
-        taskType = 0,
-        solutionType = 1,
-    };
-
-    unsigned long long fromTaskIndex;
-    unsigned long long toTaskIndex;
-    unsigned int dataType;
-};
-
-struct RespondCustomMiningData
-{
-    enum
-    {
-        type = 56,
-    };
-    enum
-    {
-        taskType = 0,
-        solutionType = 1,
-    };
-};
-
-
-struct CustomMiningRespondDataHeader
-{
-    unsigned long long itemCount;       // size of the data
-    unsigned long long itemSize;        // size of the data
-    unsigned long long fromTimeStamp;   // start of the ts
-    unsigned long long toTimeStamp;     // end of the ts
-    unsigned long long respondType;   // message type
-};
-
-constexpr int64_t OFFSET_TIME_STAMP_IN_MS = 500;
+constexpr int64_t OFFSET_TIME_STAMP_IN_MS = 600000000;
 
 template <typename T>
 void printTaskInfo(T* tk, std::string logHeader)
@@ -563,6 +589,153 @@ void printTaskInfo(T* tk, std::string logHeader)
 }
 
 static uint64_t lastTaskTimeStamp = 0;
+
+static randomx_flags gRandomXFlags;
+static randomx_cache *gRandomXCache;
+static randomx_vm * gRandomXVM = NULL;
+static uint8_t gRandomXCacheBuff[32];
+
+void initRandomX()
+{
+    gRandomXFlags = randomx_get_flags();
+    gRandomXCache = randomx_alloc_cache(gRandomXFlags);
+    randomx_init_cache(gRandomXCache, gRandomXCacheBuff, 32);
+    gRandomXVM = randomx_create_vm(gRandomXFlags, gRandomXCache, NULL);
+}
+
+void cleanRandomX()
+{
+    randomx_destroy_vm(gRandomXVM);
+    randomx_release_cache(gRandomXCache);
+}
+
+void verifySolutionFromNode(const XMRTask& rTask, std::vector<XMRSolution>& rSolutions)
+{
+    XMRTask local_task = rTask;
+
+    randomx_init_cache(gRandomXCache, local_task.m_seed, 32);
+    randomx_vm_set_cache(gRandomXVM, gRandomXCache);
+
+    for (auto& it : rSolutions)
+    {
+        uint8_t out[32];
+        std::vector<uint8_t> blob;
+        blob.resize(local_task.m_size, 0);
+        memcpy(blob.data(), local_task.m_blob, local_task.m_size);
+        uint32_t nonce = it.nonce;
+        memcpy(blob.data() + XMR_NONCE_POS, &nonce, 4);
+        randomx_calculate_hash(gRandomXVM, blob.data(), local_task.m_size, out);
+        uint64_t v = ((uint64_t*)out)[3];
+        char hex[64];
+        byteToHex(out, hex, 32);
+        solution candidate = it.convertToSol();
+
+        // Dummy test, for each 2 valid solution, the next one will be invalid
+        bool dummyInvalid = false;
+        #if DUMMY_TEST
+        {
+            std::lock_guard<std::mutex> dummyLock(gDummyLock);
+            gDummyCounter++;
+            if (gDummyCounter % 3 == 0)
+            {
+                dummyInvalid = true;
+            }
+        }
+        #endif
+
+        RequestedCustomMiningSolutionVerification verifedSol;
+        verifedSol.nonce = candidate.nonce;
+        verifedSol.taskIndex = local_task.taskIndex;
+        verifedSol.padding = candidate.padding;
+
+        if (v < local_task.m_target && !dummyInvalid)
+        {
+            verifedSol.isValid = 1;
+            gValid.fetch_add(1);
+            printf("Valid Share from comp %d: %s\n", nonce % 676, hex);
+        }
+        else
+        {
+            verifedSol.isValid = 0;
+            gInValid.fetch_add(1);
+        }
+        // Save the solution for sending to node this is an invalidate solutions
+        {
+            std::lock_guard<std::mutex> validLock(gValidSolLock);
+            gReportedSolutionsVec.push_back(verifedSol);
+        }
+    }
+}
+
+void getCustomMiningSolutions(QCPtr pConnection, const char* logHeader, const std::map<uint64_t, XMRTask>& nodeTask)
+{
+    nodeSolutions.clear();
+
+    struct {
+        RequestResponseHeader header;
+        RequestedCustomMiningData requestData;
+        unsigned char signature[SIGNATURE_SIZE];
+    } packet;
+
+    packet.header.setSize(sizeof(packet));
+    packet.header.randomizeDejavu();
+    packet.header.setType(RequestedCustomMiningData::type);
+
+
+    for (const auto& it : nodeTask)
+    {
+        unsigned long long taskIndex = it.second.taskIndex;
+        packet.requestData.dataType = RequestedCustomMiningData::solutionType;
+        packet.requestData.fromTaskIndex = taskIndex;
+        packet.requestData.toTaskIndex = 0; // Unused
+
+        // Sign the message
+        uint8_t digest[32] = {0};
+        uint8_t signature[64] = {0};
+        KangarooTwelve(
+            (unsigned char*)&packet.requestData,
+            sizeof(RequestedCustomMiningData),
+            digest,
+            32);
+        sign(operatorSubSeed, operatorPublicKey, digest, signature);
+        memcpy(packet.signature, signature, 64);
+
+        // Send request solution
+        int dataSent = pConnection->sendData((uint8_t*)&packet, sizeof(packet));
+        if (dataSent > 0)
+        {
+            // Get the solution
+            RequestResponseHeader respond_header = pConnection->receiveHeader();
+            // Verified the message
+            if (respond_header.type() == RespondCustomMiningData::type)
+            {
+                if (respond_header.size() > sizeof(RequestResponseHeader))
+                {
+                    unsigned int dataSize = respond_header.size() - sizeof(RequestResponseHeader);
+                    std::vector<unsigned char> dataBuffer(dataSize);
+                    unsigned char* pData = &dataBuffer[0];
+                    unsigned int receivedSize = pConnection->receiveData(pData, dataSize);
+
+                    CustomMiningRespondDataHeader respondDataHeader = *(CustomMiningRespondDataHeader*)pData;
+                    if (respondDataHeader.itemCount > 0 && respondDataHeader.respondType == RespondCustomMiningData::solutionType)
+                    {
+                        std::cout << "Found " << respondDataHeader.itemCount << " shares for task index " << taskIndex << std::endl << std::flush;
+
+                        // Push the solutions into queue
+                        XMRSolution* pSols = (XMRSolution*)(pData + sizeof(CustomMiningRespondDataHeader));
+                        for (int k = 0; k < respondDataHeader.itemCount; k++)
+                        {
+                            nodeSolutions[taskIndex].push_back(pSols[k]);
+                        }
+
+                        // Verified solutions
+                        verifySolutionFromNode(it.second, nodeSolutions[taskIndex]);
+                    }
+                }
+            }
+        }
+    }
+}
 
 bool fetchCustomMiningData(QCPtr pConnection, const char* logHeader)
 {
@@ -610,23 +783,50 @@ bool fetchCustomMiningData(QCPtr pConnection, const char* logHeader)
                 unsigned char* pData = &dataBuffer[0];
                 unsigned int receivedSize = pConnection->receiveData(pData, dataSize);
 
+                unsigned long long lastReceivedTaskTs = 0;
                 CustomMiningRespondDataHeader respondDataHeader = *(CustomMiningRespondDataHeader*)pData;
-                if (respondDataHeader.itemCount > 0)
+                if (respondDataHeader.itemCount > 0 && respondDataHeader.respondType == RespondCustomMiningData::taskType)
                 {
                     std::vector<XMRTask> taskVec;
-                    pData += sizeof(CustomMiningRespondDataHeader);
-                    unsigned char* task = pData;
-                    for (int i = 0; i < respondDataHeader.itemCount; i++, task += sizeof(XMRTask))
+                    XMRTask* pTask = (XMRTask*)(pData + sizeof(CustomMiningRespondDataHeader));
+                    for (int i = 0; i < respondDataHeader.itemCount; i++)
                     {
-                        XMRTask rawTask = *(XMRTask*)pData;
-                        taskVec.push_back(rawTask);
-                        printTaskInfo<XMRTask>(&rawTask, logHeader);
+                        XMRTask rawTask = pTask[i];
+
+                        lastReceivedTaskTs = rawTask.taskIndex;
+                        //printTaskInfo<XMRTask>(&rawTask, logHeader);
+                        task tk = rawTask.convertToTask();
+                        // Update the task
+                        nodeTasks[rawTask.taskIndex] = rawTask;
                     }
-                    haveCustomMiningData = true;
+
+                    // Remove too late task
+                    auto now = std::chrono::system_clock::now();
+                    auto duration = now.time_since_epoch();
+                    auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+                    for (auto it = nodeTasks.begin(); it != nodeTasks.end(); )
+                    {
+                        if (std::abs((int64_t)it->first - (int64_t)(milliseconds) > OFFSET_TIME_STAMP_IN_MS))
+                        {
+                            it = nodeTasks.erase(it);
+                        }
+                        else
+                        {
+                            ++it;
+                        }
+                    }
+
+                    // From current active task. Try to fetch solutions/shares of the task
+                    getCustomMiningSolutions(pConnection, logHeader, nodeTasks);
 
                     // Update the last time stamp
+                    if (lastReceivedTaskTs > 0)
                     {
-                        lastTaskTimeStamp = taskVec.rbegin()->taskIndex + 1;
+                        lastTaskTimeStamp = lastReceivedTaskTs + 1;
+                    }
+                    else
+                    {
+                        lastReceivedTaskTs = lastReceivedTaskTs + 10000;
                     }
                 }
             }
@@ -646,10 +846,10 @@ void operatorFetcherThread(const char* nodeIp)
         try {
             if (needReconnect)
             {
+                nPeer.fetch_add(1);
                 needReconnect = false;
                 qc = make_qc(nodeIp, OPERATOR_PORT);
                 printf("%sConnected OPERATOR node %s\n", log_header.c_str(), nodeIp);
-                nPeer.fetch_add(1);
             }
 
             bool haveCustomMiningData = fetchCustomMiningData(qc, log_header.c_str());
@@ -753,6 +953,7 @@ int run(int argc, char *argv[]) {
     }
 
     // Fetch tasks from node ip
+    initRandomX();
     std::shared_ptr<std::thread> operator_thread;
     if (!seed.empty() && !operatorIp.empty())
     {
@@ -768,7 +969,7 @@ int run(int argc, char *argv[]) {
     std::shared_ptr<std::thread> submit_thr;
     if (!seed.empty())
     {
-        submit_thr = std::make_shared<std::thread>(sendVerifiedSolution, operatorIp.c_str());
+        submit_thr = std::make_shared<std::thread>(submitVerifiedSolution, operatorIp.c_str());
     }
 
     SLEEP(3000);
@@ -777,6 +978,7 @@ int run(int argc, char *argv[]) {
         printf("Active peer: %d | Valid: %lu | Invalid: %lu | Stale: %lu | Submit: %lu\n", nPeer.load(), gValid.load(), gInValid.load(), gStale.load(), gSubmittedSols.load());
         SLEEP(10000);
     }
+    cleanRandomX();
 
     return 0;
 }
