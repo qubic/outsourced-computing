@@ -117,7 +117,7 @@ struct RequestedCustomMiningData
 {
     enum
     {
-        type = 55,
+        type = 60,
     };
     enum
     {
@@ -134,7 +134,7 @@ struct RespondCustomMiningData
 {
     enum
     {
-        type = 60,
+        type = 61,
     };
     enum
     {
@@ -147,12 +147,31 @@ struct RequestedCustomMiningSolutionVerification
 {
     enum
     {
-        type = 61,
+        type = 62,
     };
     unsigned long long taskIndex;
     unsigned int nonce; // nonce of invalid solution
     unsigned int padding;
     unsigned char isValid; // validity of the solution
+};
+
+struct RespondCustomMiningSolutionVerification
+{
+    enum
+    {
+        type = 63,
+    };
+    enum
+    {
+        notExisted = 0,             // solution not existed in cache
+        valid = 1,                  // solution are set as valid
+        invalid = 2,                // solution are set as invalid
+        customMiningStateEnded = 3, // not in custom mining state
+    };
+    unsigned long long taskIndex;
+    unsigned int nonce;
+    unsigned int padding;    // XMR padding data
+    unsigned char status;   // Flag indicate the status of solution
 };
 
 
@@ -243,12 +262,25 @@ bool reportVerifiedSol(QCPtr pConnection)
             // Send successfull, erase it from the invalid queue
             if (dataSent > 0)
             {
+                struct {
+                    RequestResponseHeader header;
+                    RespondCustomMiningSolutionVerification verifiedSol;
+                } respondPacket;
+
+                int dataRev = pConnection->receiveData((uint8_t*)&respondPacket, sizeof(respondPacket));
+                if (dataRev > 0)
+                {
+                    // TODO: process respond here.
+                }
+
+                // Repsond is good. Remove the submitted sol
                 std::lock_guard<std::mutex> validLock(gValidSolLock);
                 if (!gReportedSolutionsVec.empty())
                 {
                     gReportedSolutionsVec.erase(gReportedSolutionsVec.begin());
                     gSubmittedSols.fetch_add(1);
                 }
+
             }
         }
     }
@@ -781,7 +813,7 @@ bool fetchCustomMiningData(QCPtr pConnection, const char* logHeader)
                 unsigned int dataSize = respond_header.size() - sizeof(RequestResponseHeader);
                 std::vector<unsigned char> dataBuffer(dataSize);
                 unsigned char* pData = &dataBuffer[0];
-                unsigned int receivedSize = pConnection->receiveData(pData, dataSize);
+                int receivedSize = pConnection->receiveData(pData, dataSize);
 
                 unsigned long long lastReceivedTaskTs = 0;
                 CustomMiningRespondDataHeader respondDataHeader = *(CustomMiningRespondDataHeader*)pData;
