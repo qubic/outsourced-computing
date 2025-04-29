@@ -127,7 +127,7 @@ struct RequestedCustomMiningData
 
     unsigned long long fromTaskIndex;
     unsigned long long toTaskIndex;
-    unsigned int dataType;
+    long long dataType;
 };
 
 struct RespondCustomMiningData
@@ -152,7 +152,7 @@ struct RequestedCustomMiningSolutionVerification
     unsigned long long taskIndex;
     unsigned int nonce; // nonce of invalid solution
     unsigned int padding;
-    unsigned char isValid; // validity of the solution
+    unsigned long long isValid; // validity of the solution
 };
 
 struct RespondCustomMiningSolutionVerification
@@ -171,7 +171,7 @@ struct RespondCustomMiningSolutionVerification
     unsigned long long taskIndex;
     unsigned int nonce;
     unsigned int padding;    // XMR padding data
-    unsigned char status;   // Flag indicate the status of solution
+    long long status;   // Flag indicate the status of solution
 };
 
 
@@ -181,7 +181,7 @@ struct CustomMiningRespondDataHeader
     unsigned long long itemSize;        // size of the data
     unsigned long long fromTimeStamp;   // start of the ts
     unsigned long long toTimeStamp;     // end of the ts
-    unsigned long long respondType;   // message type
+    unsigned long long respondType;     // message type
 };
 
 
@@ -696,6 +696,7 @@ void verifySolutionFromNode(const XMRTask& rTask, std::vector<XMRSolution>& rSol
         {
             verifedSol.isValid = 0;
             gInValid.fetch_add(1);
+            printf("Invalid Share from comp %d: %s\n", nonce % 676, hex);
         }
         // Save the solution for sending to node this is an invalidate solutions
         {
