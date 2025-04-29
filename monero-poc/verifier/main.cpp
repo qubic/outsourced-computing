@@ -468,7 +468,13 @@ void listenerThread(const char* nodeIp)
                     uint8_t gammingKey[32];
                     KangarooTwelve(sharedKeyAndGammingNonce, 64, gammingKey, 32);
 
-                    //TODO: verify sig here
+                    uint8_t digest[32];
+                    KangarooTwelve(buff.data(), buff.size() - 64, digest, 32);
+                    if (!verify(share->sourcePublicKey, digest, buff.data() + buff.size() - 64))
+                    {
+                        printf("Wrong sig from computor %s\n", iden);
+                        continue;
+                    }
 
                     if (gammingKey[0] != 2)
                     {
