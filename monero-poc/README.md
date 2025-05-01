@@ -23,13 +23,14 @@
 ```
 
 ## POC Phases
-The POC is junked into 5 Phases.
+The POC is junked into Phases.
 
 1. Basic Testing of Messaging ✅
 2. Connect Qubic Messaging with Monero (Bridging)✅
-3. End-To-End Messaging (including signaling and real monero tasks) ⌛
-4. Solution Validation (Oracle) and Revenue Calculation ⏳
-5. Go-Live 
+3. End-To-End Messaging (including signaling and real monero tasks) ✅
+4. Solution Validation (Oracle) and Revenue Calculation ✅
+5. Final Test Round ⏳
+6. Go-Live
 
 ## The Principle
 For the POC we need high speed delivery of tasks and solutions. We will build on top of the [Qubic Broadcast Message](https://github.com/qubic/core/blob/main/src/network_messages/broadcast_message.h) to achieve this.
