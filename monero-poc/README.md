@@ -57,8 +57,7 @@ struct
     unsigned long long taskIndex; // ever increasing number (unix timestamp in ms)
 
     unsigned short firstComputorIndex, lastComputorIndex; // range of computors to which this task is meant to
-    unsigned short numberOfUpstreams; // the number of upstreams from Qubic to XMR Pool
-    unsigned short padding;
+    unsigned int padding;
 
     unsigned char m_blob[408]; // Job data from pool
     unsigned long long m_size;  // length of the blob
@@ -97,7 +96,7 @@ struct
     unsigned int nonce;         // xmrig::JobResult.nonce
     unsigned int padding;       // reserve for future use
     unsigned char result[32];   // xmrig::JobResult.result
-    
+
     unsigned char signature[64];
 } solution;
 ```

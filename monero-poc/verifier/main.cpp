@@ -13,6 +13,7 @@
 #include <atomic>
 #include <sstream>
 #include <iostream>
+#include <csignal>
 
 #define DISPATCHER "XPXYKFLGSWRHRGAUKWFWVXCDVEYAPCPCNUTMUDWFGDYQCWZNJMWFZEEGCFFO"
 uint8_t dispatcherPubkey[32] = {0};
@@ -26,18 +27,27 @@ char operatorPublicIdentity[128] = {0};
 std::mutex gDummyLock;
 unsigned long long gDummyCounter = 0;
 
+constexpr uint16_t NUMBER_OF_TASK_PARTITIONS = 4;
+struct
+{
+    uint16_t firstComputorIdx;
+    uint16_t lastComputorIdx;
+    uint32_t domainSize;
+} gTaskPartition[NUMBER_OF_TASK_PARTITIONS];
+uint16_t gComputorPartitionMap[NUMBER_OF_COMPUTORS];
 
-// #if DUMMY_TEST
-// #define OPERATOR_PORT 31841
-// #else
- #define OPERATOR_PORT 21841
-// #endif
+
+#if DUMMY_TEST
+#define OPERATOR_PORT 31841
+#else
+#define OPERATOR_PORT 21841
+#endif
 
 
 #define PORT 21841
 #define SLEEP(x) std::this_thread::sleep_for(std::chrono::milliseconds (x));
 bool shouldExit = false;
-uint64_t prevTask = 0;
+uint64_t prevTask[NUMBER_OF_TASK_PARTITIONS] = {0};
 struct task
 {
     uint8_t sourcePublicKey[32]; // the source public key is the DISPATCHER public key
@@ -45,6 +55,8 @@ struct task
     uint8_t gammingNonce[32];
 
     uint64_t taskIndex; // ever increasing number (unix timestamp in ms)
+    uint16_t firstComputorIndex, lastComputorIndex;
+    uint32_t padding;
 
     uint8_t m_blob[408]; // Job data from pool
     uint64_t m_size;  // length of the blob
@@ -62,8 +74,9 @@ struct solution
     uint8_t gammingNonce[32];
 
     uint64_t _taskIndex;
+    uint16_t firstComputorIndex, lastComputorIndex;
+
     uint32_t nonce;         // xmrig::JobResult.nonce
-    uint32_t padding; // reserve for future use
     uint8_t result[32];   // xmrig::JobResult.result
     uint8_t signature[64];
 } ;
@@ -71,6 +84,8 @@ struct solution
 struct XMRTask
 {
     uint64_t taskIndex; // ever increasing number (unix timestamp in ms)
+    uint16_t firstComputorIndex, lastComputorIndex;
+    uint32_t padding;
 
     uint8_t m_blob[408]; // Job data from pool
     uint64_t m_size;  // length of the blob
@@ -78,13 +93,13 @@ struct XMRTask
     uint64_t m_height; // Block height
     uint8_t m_seed[32]; // Seed hash for XMR
 
-    unsigned int extraNonce;
-
     task convertToTask()
     {
         task tk;
 
         tk.taskIndex = taskIndex;
+        tk.firstComputorIndex = firstComputorIndex;
+        tk.lastComputorIndex = lastComputorIndex;
         memcpy(tk.m_blob, m_blob, 408);
         tk.m_size = m_size;
         tk.m_target = m_target;
@@ -97,16 +112,19 @@ struct XMRTask
 struct XMRSolution
 {
     uint64_t taskIndex;
+    uint16_t firstComputorIndex, lastComputorIndex;
+
     uint32_t nonce;         // xmrig::JobResult.nonce
-    uint32_t padding;       // reserve for future use
     uint8_t result[32];     // xmrig::JobResult.result
 
     solution convertToSol()
     {
         solution sol;
         sol._taskIndex = taskIndex;
+        sol.firstComputorIndex = firstComputorIndex;
+        sol.lastComputorIndex = lastComputorIndex;
+
         sol.nonce = nonce;
-        sol.padding = padding;
         memcpy(sol.result, result, 32);
         return sol;
     }
@@ -127,6 +145,12 @@ struct RequestedCustomMiningData
 
     unsigned long long fromTaskIndex;
     unsigned long long toTaskIndex;
+
+    // Determine which task partition
+    unsigned short firstComputorIdx;
+    unsigned short lastComputorIdx;
+    unsigned int padding;
+
     long long dataType;
 };
 
@@ -150,8 +174,8 @@ struct RequestedCustomMiningSolutionVerification
         type = 62,
     };
     unsigned long long taskIndex;
+    unsigned short firstComputorIndex, lastComputorIndex;
     unsigned int nonce; // nonce of invalid solution
-    unsigned int padding;
     unsigned long long isValid; // validity of the solution
 };
 
@@ -169,8 +193,8 @@ struct RespondCustomMiningSolutionVerification
         customMiningStateEnded = 3, // not in custom mining state
     };
     unsigned long long taskIndex;
+    unsigned short firstComputorIndex, lastComputorIndex;
     unsigned int nonce;
-    unsigned int padding;    // XMR padding data
     long long status;   // Flag indicate the status of solution
 };
 
@@ -186,12 +210,12 @@ struct CustomMiningRespondDataHeader
 
 
 // simple poc design and queue, need better design to have higher precision
-std::mutex taskLock;
-task currentTask;
+std::mutex taskLock[NUMBER_OF_TASK_PARTITIONS];
+task currentTask[NUMBER_OF_TASK_PARTITIONS];
 
-std::mutex solLock;
-std::queue<solution> qSol;
-std::map<std::pair<uint64_t, uint32_t>, bool> mTaskNonce; // map task-nonce to avoid duplicated shares
+std::mutex solLock[NUMBER_OF_TASK_PARTITIONS];
+std::queue<solution> qSol[NUMBER_OF_TASK_PARTITIONS];
+std::map<std::pair<uint64_t, uint32_t>, bool> mTaskNonce[NUMBER_OF_TASK_PARTITIONS]; // map task-nonce to avoid duplicated shares
 std::atomic<uint64_t> gStale;
 std::atomic<uint64_t> gInValid;
 std::atomic<uint64_t> gValid;
@@ -212,6 +236,27 @@ void getKey()
     getPrivateKeyFromSubSeed(operatorSubSeed, operatorPrivateKey);
     getPublicKeyFromPrivateKey(operatorPrivateKey, operatorPublicKey);
     getIdentityFromPublicKey(operatorPublicKey, operatorPublicIdentity, false);
+}
+
+// Get the ID of the this solutions
+int getPartitionID(uint16_t firstComputorIndex, uint16_t lastComputorIndex)
+{
+    int partitionID = -1;
+    for (int k = 0; k < NUMBER_OF_TASK_PARTITIONS; k++)
+    {
+        if (firstComputorIndex == gTaskPartition[k].firstComputorIdx
+            && lastComputorIndex == gTaskPartition[k].lastComputorIdx)
+        {
+            partitionID = k;
+            break;
+        }
+    }
+    return partitionID;
+}
+
+int getComputorID(uint32_t nonce, int partId)
+{
+    return nonce / gTaskPartition[partId].domainSize + gTaskPartition[partId].firstComputorIdx;
 }
 
 bool reportVerifiedSol(QCPtr pConnection)
@@ -260,7 +305,7 @@ bool reportVerifiedSol(QCPtr pConnection)
             int dataSent = pConnection->sendData((uint8_t*)&packet, sizeof(packet));
 
             // Send successfull, erase it from the invalid queue
-            if (dataSent > 0)
+            if (dataSent == sizeof(packet))
             {
                 struct {
                     RequestResponseHeader header;
@@ -316,11 +361,19 @@ void submitVerifiedSolution(const char* nodeIp)
             nPeer.fetch_add(-1);;
             SLEEP(1000);
         }
+        catch (...)
+        {
+            printf("Unknown exception caught!\n");
+            fflush(stdout);
+            needReconnect = true;
+            nPeer.fetch_add(-1);
+            SLEEP(1000);
+        }
     }
 }
 
 
-void verifyThread()
+void verifyThread(int taskGroupID)
 {
     task local_task;
     memset(&local_task, 0, sizeof(task));
@@ -328,54 +381,60 @@ void verifyThread()
     randomx_cache *cache = randomx_alloc_cache(flags);
     randomx_init_cache(cache, local_task.m_seed, 32);
     randomx_vm *vm = randomx_create_vm(flags, cache, NULL);
-    while (currentTask.taskIndex == 0) SLEEP(100); // wait for the first job
+    while (currentTask[taskGroupID].taskIndex == 0) SLEEP(100); // wait for the first job
 
     while (!shouldExit)
     {
-        if (local_task.taskIndex != currentTask.taskIndex)
+        if (local_task.taskIndex != currentTask[taskGroupID].taskIndex)
         {
-            if (memcmp(local_task.m_seed, currentTask.m_seed, 32) != 0)
+            if (memcmp(local_task.m_seed, currentTask[taskGroupID].m_seed, 32) != 0)
             {
-                randomx_init_cache(cache, currentTask.m_seed, 32);
+                randomx_init_cache(cache, currentTask[taskGroupID].m_seed, 32);
                 randomx_vm_set_cache(vm, cache);
             }
-            local_task = currentTask;
+            local_task = currentTask[taskGroupID];
         }
         solution candidate;
         bool haveSol = false;
         {
-            std::lock_guard<std::mutex> sl(solLock);
-            if (!qSol.empty())
+            std::lock_guard<std::mutex> sl(solLock[taskGroupID]);
+            if (!qSol[taskGroupID].empty())
             {
-                candidate = qSol.front();
-                qSol.pop();
+                candidate = qSol[taskGroupID].front();
+                qSol[taskGroupID].pop();
                 haveSol = true;
             }
 
             // clean the key that has lower task index
-            if (!mTaskNonce.empty())
+            if (!mTaskNonce[taskGroupID].empty())
             {
                 std::vector<std::pair<uint64_t,uint32_t>> to_be_delete;
-                for (auto const& item : mTaskNonce)
+                for (auto const& item : mTaskNonce[taskGroupID])
                 {
-                    if (item.first.first < currentTask.taskIndex)
+                    if (item.first.first < currentTask[taskGroupID].taskIndex)
                     {
                         to_be_delete.push_back(item.first);
                     }
                 }
                 for (auto const& item : to_be_delete)
                 {
-                    mTaskNonce.erase(item);
+                    mTaskNonce[taskGroupID].erase(item);
                 }
             }
         }
         if (haveSol)
         {
+            int computorId = getComputorID(candidate.nonce, taskGroupID);
+            if (computorId > candidate.lastComputorIndex)
+            {
+                printf("Nonce is out of range  want <= %d | have %d\n", candidate.lastComputorIndex, computorId);
+                continue;
+            }
+
             if (candidate._taskIndex < local_task.taskIndex)
             {
                 gStale.fetch_add(1);
-                uint32_t nonce = candidate.nonce;
-                printf("Stale Share from comp %d\n", nonce % 676);
+                printf("Stale Share from comp %d\n", computorId);
                 continue;
             }
             else if (candidate._taskIndex > local_task.taskIndex)
@@ -397,13 +456,13 @@ void verifyThread()
             RequestedCustomMiningSolutionVerification verifedSol;
             verifedSol.nonce = candidate.nonce;
             verifedSol.taskIndex = local_task.taskIndex;
-            verifedSol.padding = candidate.padding;
+            //verifedSol.padding = candidate.padding;
 
             if (v < local_task.m_target)
             {
                 verifedSol.isValid = 1;
                 gValid.fetch_add(1);
-                printf("Valid Share from comp %d: %s\n", nonce % 676, hex);
+                printf("Valid Share from comp %d: %s\n", computorId, hex);
             }
             else
             {
@@ -413,7 +472,7 @@ void verifyThread()
                     verifedSol.isValid = 0;
                 }
                 gInValid.fetch_add(1);
-                printf("Invalid Share from comp %d: %s\n", nonce % 676, hex);
+                printf("Invalid Share from comp %d: %s\n", computorId, hex);
             }
             gReportedSolutionsVec.push_back(verifedSol);
         }
@@ -476,22 +535,37 @@ void listenerThread(const char* nodeIp)
                         continue;
                     }
 
-                    if (gammingKey[0] != 2)
+                    // Get the ID of the this solutions
+                    int partId =  getPartitionID(share->firstComputorIndex, share->lastComputorIndex);
+                    if (partId < 0)
                     {
-                        printf("Wrong type from comps (%s) No.%d. want %d | have %d\n", iden, share->nonce % 676, 2, gammingKey[0]);
                         continue;
                     }
+                    int computorNonceID = getComputorID(share->nonce, partId);
+                    if (computorNonceID > share->lastComputorIndex)
                     {
-                        std::lock_guard<std::mutex> slock(solLock);
+                        printf("Nonce is out of range from comps (%s) want <= %d | have %d\n", iden, share->lastComputorIndex, computorNonceID);
+                        continue;
+                    }
+
+
+                    if (gammingKey[0] != 2)
+                    {
+                        printf("Wrong type from comps (%s) No.%d. want %d | have %d\n", iden, computorNonceID, 2, gammingKey[0]);
+                        continue;
+                    }
+
+                    {
+                        std::lock_guard<std::mutex> slock(solLock[partId]);
                         auto p = std::make_pair(share->_taskIndex, share->nonce);
-                        if (mTaskNonce.find(p) == mTaskNonce.end())
+                        if (mTaskNonce[partId].find(p) == mTaskNonce[partId].end())
                         {
-                            mTaskNonce[p] = true;
-                            qSol.push(*share);
+                            mTaskNonce[partId][p] = true;
+                            qSol[partId].push(*share);
                         }
                     }
                 }
-                else if (buff.size() == 632)
+                else if (buff.size() == sizeof(task))
                 {
                     task* tk = (task*)buff.data();
                     if (memcmp(dispatcherPubkey, tk->sourcePublicKey, 32) != 0)
@@ -516,11 +590,18 @@ void listenerThread(const char* nodeIp)
                         printf("Wrong sig from dispatcher\n");
                         continue;
                     }
+                    // Get the ID of the this solutions
+                    int partId =  getPartitionID(tk->firstComputorIndex, tk->lastComputorIndex);
+                    if (partId < 0)
                     {
-                        std::lock_guard<std::mutex> glock(taskLock);
-                        if (currentTask.taskIndex <  tk->taskIndex)
+                        continue;
+                    }
+
+                    {
+                        std::lock_guard<std::mutex> glock(taskLock[partId]);
+                        if (currentTask[partId].taskIndex <  tk->taskIndex)
                         {
-                            currentTask = *tk;
+                            currentTask[partId] = *tk;
                         }
                         else
                         {
@@ -536,14 +617,14 @@ void listenerThread(const char* nodeIp)
                         auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
                         delta_local = (int64_t)(tk->taskIndex) - (int64_t)(milliseconds);
                     }
-                    if (prevTask)
+                    if (prevTask[partId])
                     {
-                        delta = (tk->taskIndex - prevTask);
+                        delta = (tk->taskIndex - prevTask[partId]);
                     }
-                    prevTask = tk->taskIndex;
+                    prevTask[partId] = tk->taskIndex;
                     char dbg[256] = {0};
                     std::string debug_log = log_header;
-                    sprintf(dbg, "Received task index %lu (d_prev: %lu ms) (d_local: %lu ms): ", tk->taskIndex, delta, delta_local);
+                    sprintf(dbg, "Received task index %lu, firstIdx %d, lastIdx %d (d_prev: %lu ms) (d_local: %lu ms): ", tk->taskIndex, tk->firstComputorIndex, tk->lastComputorIndex, delta, delta_local);
                     debug_log += std::string(dbg); memset(dbg, 0, sizeof(dbg));
                     int blobSz = tk->m_size;
                     for (int i = 0; i < 4; i++)
@@ -575,13 +656,21 @@ void listenerThread(const char* nodeIp)
             printf("%s\n", ex.what());
             fflush(stdout);
             needReconnect = true;
-            nPeer.fetch_add(-1);;
+            nPeer.fetch_add(-1);
+            SLEEP(1000);
+        }
+        catch (...)
+        {
+            printf("Unknown exception caught!\n");
+            fflush(stdout);
+            needReconnect = true;
+            nPeer.fetch_add(-1);
             SLEEP(1000);
         }
     }
 }
 
-constexpr int64_t OFFSET_TIME_STAMP_IN_MS = 600000000;
+constexpr int64_t OFFSET_TIME_STAMP_IN_MS = 600000;
 
 template <typename T>
 void printTaskInfo(T* tk, std::string logHeader)
@@ -651,6 +740,8 @@ void verifySolutionFromNode(const XMRTask& rTask, std::vector<XMRSolution>& rSol
 {
     XMRTask local_task = rTask;
 
+    int partId = getPartitionID(rTask.firstComputorIndex, rTask.lastComputorIndex);
+
     randomx_init_cache(gRandomXCache, local_task.m_seed, 32);
     randomx_vm_set_cache(gRandomXVM, gRandomXCache);
 
@@ -674,7 +765,7 @@ void verifySolutionFromNode(const XMRTask& rTask, std::vector<XMRSolution>& rSol
         {
             std::lock_guard<std::mutex> dummyLock(gDummyLock);
             gDummyCounter++;
-            if (gDummyCounter % 3 == 0)
+            if (gDummyCounter % 4 == 0)
             {
                 dummyInvalid = true;
             }
@@ -684,19 +775,26 @@ void verifySolutionFromNode(const XMRTask& rTask, std::vector<XMRSolution>& rSol
         RequestedCustomMiningSolutionVerification verifedSol;
         verifedSol.nonce = candidate.nonce;
         verifedSol.taskIndex = local_task.taskIndex;
-        verifedSol.padding = candidate.padding;
+        verifedSol.firstComputorIndex = candidate.firstComputorIndex;
+        verifedSol.lastComputorIndex = candidate.lastComputorIndex;
+        //verifedSol.padding = candidate.padding;
 
-        if (v < local_task.m_target && !dummyInvalid)
+        int computorID = getComputorID(candidate.nonce, partId);
+        #if DUMMY_TEST
+        if (computorID <= local_task.lastComputorIndex && !dummyInvalid)
+        #else
+        if (computorID <= local_task.lastComputorIndex && v < local_task.m_target)
+        #endif
         {
             verifedSol.isValid = 1;
             gValid.fetch_add(1);
-            printf("Valid Share from comp %d: %s\n", nonce % 676, hex);
+            printf("Valid Share for comp %d: %s\n", computorID, hex);
         }
         else
         {
             verifedSol.isValid = 0;
             gInValid.fetch_add(1);
-            printf("Invalid Share from comp %d: %s\n", nonce % 676, hex);
+            printf("Invalid Share for comp %d: %s\n", computorID, hex);
         }
         // Save the solution for sending to node this is an invalidate solutions
         {
@@ -720,12 +818,13 @@ void getCustomMiningSolutions(QCPtr pConnection, const char* logHeader, const st
     packet.header.randomizeDejavu();
     packet.header.setType(RequestedCustomMiningData::type);
 
-
     for (const auto& it : nodeTask)
     {
         unsigned long long taskIndex = it.second.taskIndex;
         packet.requestData.dataType = RequestedCustomMiningData::solutionType;
         packet.requestData.fromTaskIndex = taskIndex;
+        packet.requestData.firstComputorIdx = it.second.firstComputorIndex;
+        packet.requestData.lastComputorIdx = it.second.lastComputorIndex;
         packet.requestData.toTaskIndex = 0; // Unused
 
         // Sign the message
@@ -741,7 +840,7 @@ void getCustomMiningSolutions(QCPtr pConnection, const char* logHeader, const st
 
         // Send request solution
         int dataSent = pConnection->sendData((uint8_t*)&packet, sizeof(packet));
-        if (dataSent > 0)
+        if (dataSent == sizeof(packet))
         {
             // Get the solution
             RequestResponseHeader respond_header = pConnection->receiveHeader();
@@ -750,15 +849,23 @@ void getCustomMiningSolutions(QCPtr pConnection, const char* logHeader, const st
             {
                 if (respond_header.size() > sizeof(RequestResponseHeader))
                 {
-                    unsigned int dataSize = respond_header.size() - sizeof(RequestResponseHeader);
+                    int dataSize = respond_header.size() - sizeof(RequestResponseHeader);
                     std::vector<unsigned char> dataBuffer(dataSize);
                     unsigned char* pData = &dataBuffer[0];
-                    unsigned int receivedSize = pConnection->receiveData(pData, dataSize);
+                    int receivedSize = pConnection->receiveData(pData, dataSize);
+
+                    if (receivedSize != dataSize)
+                    {
+                        continue;
+                    }
 
                     CustomMiningRespondDataHeader respondDataHeader = *(CustomMiningRespondDataHeader*)pData;
                     if (respondDataHeader.itemCount > 0 && respondDataHeader.respondType == RespondCustomMiningData::solutionType)
                     {
-                        std::cout << "Found " << respondDataHeader.itemCount << " shares for task index " << taskIndex << std::endl << std::flush;
+                        std::cout << "Found " << respondDataHeader.itemCount
+                                  << " shares for task index (" << taskIndex
+                                  << ", " << it.second.firstComputorIndex << ", " << it.second.lastComputorIndex << ")"
+                                  << std::endl << std::flush;
 
                         // Push the solutions into queue
                         XMRSolution* pSols = (XMRSolution*)(pData + sizeof(CustomMiningRespondDataHeader));
@@ -808,7 +915,7 @@ bool fetchCustomMiningData(QCPtr pConnection, const char* logHeader)
 
     // Send request all task
     int dataSent = pConnection->sendData((uint8_t*)&packet, sizeof(packet));
-    if (dataSent > 0)
+    if (dataSent == sizeof(packet))
     {
         // Get the task
         RequestResponseHeader respond_header = pConnection->receiveHeader();
@@ -821,6 +928,12 @@ bool fetchCustomMiningData(QCPtr pConnection, const char* logHeader)
                 std::vector<unsigned char> dataBuffer(dataSize);
                 unsigned char* pData = &dataBuffer[0];
                 int receivedSize = pConnection->receiveData(pData, dataSize);
+
+                // Data is failed to rev
+                if (receivedSize != dataSize)
+                {
+                    return false;
+                }
 
                 unsigned long long lastReceivedTaskTs = 0;
                 CustomMiningRespondDataHeader respondDataHeader = *(CustomMiningRespondDataHeader*)pData;
@@ -905,7 +1018,15 @@ void operatorFetcherThread(const char* nodeIp)
             printf("%s\n", ex.what());
             fflush(stdout);
             needReconnect = true;
-            nPeer.fetch_add(-1);;
+            nPeer.fetch_add(-1);
+            SLEEP(1000);
+        }
+        catch (...)
+        {
+            printf("Unknown exception caught!\n");
+            fflush(stdout);
+            needReconnect = true;
+            nPeer.fetch_add(-1);
             SLEEP(1000);
         }
     }
@@ -979,6 +1100,29 @@ int run(int argc, char *argv[]) {
     }
     std::cout << std::endl;
 
+    auto now = std::chrono::system_clock::now();
+    auto duration = now.time_since_epoch();
+    auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+    lastTaskTimeStamp = milliseconds;
+
+    // Generate computor groups
+    for (int i = 0; i < NUMBER_OF_TASK_PARTITIONS; i++)
+    {
+        gTaskPartition[i].firstComputorIdx = i * NUMBER_OF_COMPUTORS / 4;
+        gTaskPartition[i].lastComputorIdx = gTaskPartition[i].firstComputorIdx + NUMBER_OF_COMPUTORS / 4 - 1;
+        gTaskPartition[i].domainSize =  (uint32_t)((1ULL << 32) / ((uint64_t)gTaskPartition[i].lastComputorIdx  - gTaskPartition[i].firstComputorIdx + 1));
+    }
+
+    // Print the domain size
+    std::cout << "Task/Share partiion: \n";
+    for (int i = 0; i < NUMBER_OF_TASK_PARTITIONS; i++)
+    {
+        std::cout << " - [" << i << "] first: " << gTaskPartition[i].firstComputorIdx;
+        std::cout << ", last:" << gTaskPartition[i].lastComputorIdx;
+        std::cout << ", domainSize:" << gTaskPartition[i].domainSize;
+        std::cout << std::endl;
+    }
+
     getPublicKeyFromIdentity(DISPATCHER, dispatcherPubkey);
     std::vector<std::thread> thr;
 
@@ -1002,7 +1146,7 @@ int run(int argc, char *argv[]) {
     std::thread verify_thr[XMR_VERIFY_THREAD];
     for (int i = 0; i < XMR_VERIFY_THREAD; i++)
     {
-        verify_thr[i] = std::thread(verifyThread);
+        verify_thr[i] = std::thread(verifyThread, i);
     }
 
     std::shared_ptr<std::thread> submit_thr;
@@ -1023,6 +1167,12 @@ int run(int argc, char *argv[]) {
 }
 
 int main(int argc, char *argv[]) {
+
+#ifndef _MSC_VER
+    // Ignore SIGPIPE globally
+    std::signal(SIGPIPE, SIG_IGN);
+#endif
+
     gStale = 0;
     gInValid = 0;
     gValid = 0;
