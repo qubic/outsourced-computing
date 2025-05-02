@@ -3,6 +3,7 @@
 
 - [Qubic - Monero POC](#qubic---monero-poc)
   - [Highlevel Process Description](#highlevel-process-description)
+  - [QUBIC's Monero Wallet Address](#qubics-monero-wallet-address)
   - [POC Phases](#poc-phases)
   - [The Principle](#the-principle)
     - [What Monero mining software to be used?](#what-monero-mining-software-to-be-used)
@@ -55,6 +56,10 @@ struct
 
     unsigned long long taskIndex; // ever increasing number (unix timestamp in ms)
 
+    unsigned short firstComputorIndex, lastComputorIndex; // range of computors to which this task is meant to
+    unsigned short numberOfUpstreams; // the number of upstreams from Qubic to XMR Pool
+    unsigned short padding;
+
     unsigned char m_blob[408]; // Job data from pool
     unsigned long long m_size;  // length of the blob
     unsigned long long m_target; // Pool difficulty
@@ -87,6 +92,7 @@ struct
     unsigned char gammingNonce[32];
 
     unsigned long long taskIndex; // sohuld match the index from task
+    unsigned short firstComputorIndex, lastComputorIndex; // copy & paste from task
 
     unsigned int nonce;         // xmrig::JobResult.nonce
     unsigned int padding;       // reserve for future use
@@ -118,7 +124,7 @@ If you have found a solution, pack it into the solution struct.
 
 - `sourcePublicKey` must be your computor public key
 - `taskIndex` must be the task indes from recevied task
-- `nonce` must be the xmrig::JobResult.nonce and equal to a `value` such that `value % 676 == computorIndex`
+- `nonce` must be the xmrig::JobResult.nonce and equal to a `value` such that `firstComputorIndex + nonce % (676 / task.NumberOfUpstreams) == computorIndex`
 - `result` must be the result from xmrig::JobResult.result
 
 Sign your solution packet with your computor seed. make the `dejavu = 0` to allow propagation of your solution in the network.
