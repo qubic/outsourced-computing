@@ -670,7 +670,12 @@ void listenerThread(const char* nodeIp)
     }
 }
 
-constexpr int64_t OFFSET_TIME_STAMP_IN_MS = 600000;
+// Params controls if we should skip too late task compare to current time stamp
+constexpr int64_t OFFSET_TIME_STAMP_IN_MS = 60000;
+
+// The time windows allow we get more task from previous.
+// This will allow us to get late arrival task
+constexpr int64_t TIME_WINDOWS_IN_MS = 20000;
 
 template <typename T>
 void printTaskInfo(T* tk, std::string logHeader)
@@ -896,8 +901,8 @@ bool fetchCustomMiningData(QCPtr pConnection, const char* logHeader)
     packet.header.randomizeDejavu();
     packet.header.setType(RequestedCustomMiningData::type);
 
-    uint64_t fromTaskIndex = lastTaskTimeStamp;// - OFFSET_TIME_STAMP_IN_MS;
-    uint64_t toTaskIndex = 0; // Fetch all the task
+    uint64_t fromTaskIndex = lastTaskTimeStamp > TIME_WINDOWS_IN_MS ? lastTaskTimeStamp - TIME_WINDOWS_IN_MS : lastTaskTimeStamp;
+    uint64_t toTaskIndex = 0; // Fetch all the task from the fromTaskIndex
     packet.requestData.dataType = RequestedCustomMiningData::taskType;
     packet.requestData.fromTaskIndex = fromTaskIndex;
     packet.requestData.toTaskIndex = toTaskIndex;
@@ -945,14 +950,14 @@ bool fetchCustomMiningData(QCPtr pConnection, const char* logHeader)
                     {
                         XMRTask rawTask = pTask[i];
 
-                        lastReceivedTaskTs = rawTask.taskIndex;
+                        lastReceivedTaskTs = rawTask.taskIndex > lastReceivedTaskTs ? rawTask.taskIndex : lastReceivedTaskTs;
                         //printTaskInfo<XMRTask>(&rawTask, logHeader);
                         task tk = rawTask.convertToTask();
                         // Update the task
                         nodeTasks[rawTask.taskIndex] = rawTask;
                     }
 
-                    // Remove too late task
+                    // Remove too late task. We can tune OFFSET_TIME_STAMP_IN_MS
                     auto now = std::chrono::system_clock::now();
                     auto duration = now.time_since_epoch();
                     auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
@@ -971,14 +976,10 @@ bool fetchCustomMiningData(QCPtr pConnection, const char* logHeader)
                     // From current active task. Try to fetch solutions/shares of the task
                     getCustomMiningSolutions(pConnection, logHeader, nodeTasks);
 
-                    // Update the last time stamp
+                    // Update the last time stamp by the last task received
                     if (lastReceivedTaskTs > 0)
                     {
-                        lastTaskTimeStamp = lastReceivedTaskTs + 1;
-                    }
-                    else
-                    {
-                        lastReceivedTaskTs = lastReceivedTaskTs + 10000;
+                        lastTaskTimeStamp = lastReceivedTaskTs;
                     }
                 }
             }
@@ -1007,11 +1008,16 @@ void operatorFetcherThread(const char* nodeIp)
             bool haveCustomMiningData = fetchCustomMiningData(qc, log_header.c_str());
             if (!haveCustomMiningData)
             {
+                // No custom mining sol. Sleep and update the time stamp
+                auto now = std::chrono::system_clock::now();
+                auto duration = now.time_since_epoch();
+                auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+                lastTaskTimeStamp = milliseconds;
                 SLEEP(1000);
             }
             else
             {
-                SLEEP(50000);
+                SLEEP(10000);
             }
         }
         catch (std::logic_error &ex) {
