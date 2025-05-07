@@ -95,7 +95,7 @@ struct
 
     unsigned int nonce;         // xmrig::JobResult.nonce
     unsigned char result[32];   // xmrig::JobResult.result
-    
+
     unsigned char signature[64];
 } solution;
 ```
