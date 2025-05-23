@@ -20,7 +20,8 @@
 
 ## QUBIC's Monero Wallet Address
 ```
-8C5gopBP7uHNjPPZWhgUVCSe3s2dy4DLjZRgwhMp8DLpPoXTU5epY2VMKP1Vnc5dwJJ9QDCiKbMjberggTu3qYWiGMYFHzd
+Solo wallet: 47hhGMKbWpKfxDiqcejWGicVvQHEYd45AEaUyKVjcZywL8c8mtjN3oACGfdrsLrPGP2r49gvTBnBiTVQcEkfBNFEKCDy7ME
+View key: 577fd4a7278f55d2a9230d32823b81497b2e854d4a8702b1256a17cda42a760d
 ```
 
 ## POC Phases
@@ -30,8 +31,8 @@ The POC is junked into Phases.
 2. Connect Qubic Messaging with Monero (Bridging)✅
 3. End-To-End Messaging (including signaling and real monero tasks) ✅
 4. Solution Validation (Oracle) and Revenue Calculation ✅
-5. Final Test Round ⏳
-6. Go-Live
+5. Final Test Round ✅
+6. Go-Live ✅ [See stats page](https://xmr-stats.qubic.org/)
 
 ## The Principle
 For the POC we need high speed delivery of tasks and solutions. We will build on top of the [Qubic Broadcast Message](https://github.com/qubic/core/blob/main/src/network_messages/broadcast_message.h) to achieve this.
