@@ -464,7 +464,11 @@ void verifyThread(int taskGroupID)
             {
                 verifedSol.isValid = 1;
                 gValid.fetch_add(1);
-                printf("Valid Share from comp %d: %s\n", computorId, hex);
+//                printf("Valid Share from comp %d: %s\n", computorId, hex);
+                {
+                    std::lock_guard<std::mutex> g(compScoreLock);
+                    compScore[computorId]++;
+                }
             }
             else
             {
@@ -474,7 +478,7 @@ void verifyThread(int taskGroupID)
                     verifedSol.isValid = 0;
                 }
                 gInValid.fetch_add(1);
-                printf("Invalid Share from comp %d: %s\n", computorId, hex);
+//                printf("Invalid Share from comp %d: %s\n", computorId, hex);
             }
             gReportedSolutionsVec.push_back(verifedSol);
         }
@@ -647,7 +651,7 @@ void listenerThread(const char* nodeIp)
                     debug_log += std::string(dbg); memset(dbg, 0, sizeof(dbg));
                     sprintf(dbg, " | height %lu\n", tk->m_height);
                     debug_log += std::string(dbg); memset(dbg, 0, sizeof(dbg));
-                    printf("%s", debug_log.c_str());
+//                    printf("%s", debug_log.c_str());
                 }
                 // TODO: help relaying the messages to connected peers
 
@@ -795,7 +799,7 @@ void verifySolutionFromNode(const XMRTask& rTask, std::vector<XMRSolution>& rSol
         {
             verifedSol.isValid = 1;
             gValid.fetch_add(1);
-            printf("Valid Share for comp %d: %s\n", computorID, hex);
+//            printf("Valid Share for comp %d: %s\n", computorID, hex);
             {
                 std::lock_guard<std::mutex> g(compScoreLock);
                 compScore[computorID]++;
@@ -805,7 +809,7 @@ void verifySolutionFromNode(const XMRTask& rTask, std::vector<XMRSolution>& rSol
         {
             verifedSol.isValid = 0;
             gInValid.fetch_add(1);
-            printf("Invalid Share for comp %d: %s\n", computorID, hex);
+//            printf("Invalid Share for comp %d: %s\n", computorID, hex);
         }
         // Save the solution for sending to node this is an invalidate solutions
         {
