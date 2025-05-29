@@ -378,7 +378,11 @@ void submitVerifiedSolution(const char* nodeIp)
 void verifyThread(int taskGroupID)
 {
     task local_task;
+    task prevLocal_task;
+    task prevPrevLocal_task;
     memset(&local_task, 0, sizeof(task));
+    memset(&prevLocal_task, 0, sizeof(task));
+    memset(&prevPrevLocal_task, 0, sizeof(task));
     randomx_flags flags = randomx_get_flags();
     randomx_cache *cache = randomx_alloc_cache(flags);
     randomx_init_cache(cache, local_task.m_seed, 32);
@@ -394,6 +398,8 @@ void verifyThread(int taskGroupID)
                 randomx_init_cache(cache, currentTask[taskGroupID].m_seed, 32);
                 randomx_vm_set_cache(vm, cache);
             }
+            prevPrevLocal_task = prevLocal_task;
+            prevLocal_task = local_task;
             local_task = currentTask[taskGroupID];
         }
         solution candidate;
@@ -433,34 +439,46 @@ void verifyThread(int taskGroupID)
                 continue;
             }
 
-            if (candidate._taskIndex < local_task.taskIndex)
-            {
-                gStale.fetch_add(1);
-                printf("Stale Share from comp %d\n", computorId);
-                continue;
-            }
-            else if (candidate._taskIndex > local_task.taskIndex)
+            task matched_task;
+            if (candidate._taskIndex > local_task.taskIndex)
             {
                 printf("Do not expected: Missing task - check your peers\n");
                 continue;
             }
+            else if (candidate._taskIndex == local_task.taskIndex)
+            {
+                matched_task = local_task;
+            }
+            else if (candidate._taskIndex == prevLocal_task.taskIndex)
+            {
+                matched_task = prevLocal_task;
+            }
+            else if (candidate._taskIndex == prevPrevLocal_task.taskIndex)
+            {
+                matched_task = prevPrevLocal_task;
+            } else {
+                gStale.fetch_add(1);
+                printf("Stale Share from comp %d\n", computorId);
+                continue;
+            }
+
             uint8_t out[32];
             std::vector<uint8_t> blob;
-            blob.resize(local_task.m_size, 0);
-            memcpy(blob.data(), local_task.m_blob, local_task.m_size);
+            blob.resize(matched_task.m_size, 0);
+            memcpy(blob.data(), matched_task.m_blob, matched_task.m_size);
             uint32_t nonce = candidate.nonce;
             memcpy(blob.data() + XMR_NONCE_POS, &nonce, 4);
-            randomx_calculate_hash(vm, blob.data(), local_task.m_size, out);
+            randomx_calculate_hash(vm, blob.data(), matched_task.m_size, out);
             uint64_t v = ((uint64_t*)out)[3];
             char hex[64];
             byteToHex(out, hex, 32);
 
             RequestedCustomMiningSolutionVerification verifedSol;
             verifedSol.nonce = candidate.nonce;
-            verifedSol.taskIndex = local_task.taskIndex;
+            verifedSol.taskIndex = matched_task.taskIndex;
             //verifedSol.padding = candidate.padding;
 
-            if (v < local_task.m_target)
+            if (v < matched_task.m_target)
             {
                 verifedSol.isValid = 1;
                 gValid.fetch_add(1);
