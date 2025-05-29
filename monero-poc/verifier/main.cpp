@@ -36,6 +36,8 @@ struct
 } gTaskPartition[NUMBER_OF_TASK_PARTITIONS];
 uint16_t gComputorPartitionMap[NUMBER_OF_COMPUTORS];
 
+uint64_t compScore[676];
+std::mutex compScoreLock;
 
 #if DUMMY_TEST
 #define OPERATOR_PORT 31841
@@ -765,8 +767,8 @@ void verifySolutionFromNode(const XMRTask& rTask, std::vector<XMRSolution>& rSol
         solution candidate = it.convertToSol();
 
         // Dummy test, for each 2 valid solution, the next one will be invalid
-        bool dummyInvalid = false;
         #if DUMMY_TEST
+        bool dummyInvalid = false;
         {
             std::lock_guard<std::mutex> dummyLock(gDummyLock);
             gDummyCounter++;
@@ -794,6 +796,10 @@ void verifySolutionFromNode(const XMRTask& rTask, std::vector<XMRSolution>& rSol
             verifedSol.isValid = 1;
             gValid.fetch_add(1);
             printf("Valid Share for comp %d: %s\n", computorID, hex);
+            {
+                std::lock_guard<std::mutex> g(compScoreLock);
+                compScore[computorID]++;
+            }
         }
         else
         {
@@ -1053,6 +1059,30 @@ void printHelp()
     printf("./oc_verifier --seed [OPERATOR SEED] --nodeip [OPERATOR node ip] --peers [nodeip0],[nodeip1], ... ,[nodeipN]\n");
 }
 
+void saveScore()
+{
+    std::lock_guard<std::mutex> g(compScoreLock);
+    std::string file_name = "compScore." + std::to_string(getCurrentEpoch()) + ".bin";
+    FILE* f = fopen(file_name.c_str(), "wb");
+    fwrite(compScore, 1, sizeof(compScore), f);
+    fclose(f);
+}
+void loadScore()
+{
+    std::lock_guard<std::mutex> g(compScoreLock);
+    std::string file_name = "compScore." + std::to_string(getCurrentEpoch()) + ".bin";
+    if (fileExists(file_name))
+    {
+        FILE* f = fopen(file_name.c_str(), "rb");
+        fread(compScore, 1, sizeof(compScore), f);
+        fclose(f);
+    }
+    else
+    {
+        memset(compScore, 0, sizeof(compScore));
+    }
+}
+
 int run(int argc, char *argv[]) {
     if (argc == 1) {
         printHelp();
@@ -1130,6 +1160,7 @@ int run(int argc, char *argv[]) {
     }
 
     getPublicKeyFromIdentity(DISPATCHER, dispatcherPubkey);
+    loadScore();
     std::vector<std::thread> thr;
 
     // Fetch task from peers
@@ -1162,10 +1193,21 @@ int run(int argc, char *argv[]) {
     }
 
     SLEEP(3000);
+    int curEpoch = getCurrentEpoch();
     while (!shouldExit)
     {
         printf("Active peer: %d | Valid: %lu | Invalid: %lu | Stale: %lu | Submit: %lu\n", nPeer.load(), gValid.load(), gInValid.load(), gStale.load(), gSubmittedSols.load());
         SLEEP(10000);
+        {
+            if (getCurrentEpoch() != curEpoch)
+            {
+                memset(compScore, 0, sizeof(compScore));
+            }
+            else
+            {
+                saveScore();
+            }
+        }
     }
     cleanRandomX();
 
