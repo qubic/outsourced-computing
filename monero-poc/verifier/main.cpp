@@ -531,7 +531,7 @@ void verifyThread(int taskGroupID)
                 std::vector<std::pair<uint64_t,uint32_t>> to_be_delete;
                 for (auto const& item : mTaskNonce[taskGroupID])
                 {
-                    if (item.first.first < currentTask[taskGroupID].taskIndex)
+                    if (item.first.first < prevPrevLocal_task.taskIndex)
                     {
                         to_be_delete.push_back(item.first);
                     }
