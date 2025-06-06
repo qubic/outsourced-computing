@@ -486,6 +486,45 @@ void submitVerifiedSolution(const char* nodeIp)
     }
 }
 
+const unsigned hr_intervals[] = {120,600,1800,3600,86400,604800};
+
+typedef struct hr_stats_t
+{
+    time_t last_calc;
+    std::atomic<uint64_t> diff_since;
+    /* 2m, 10m, 30m, 1h, 1d, 1w */
+    double avg[6];
+} hr_stats_t;
+hr_stats_t monitor_stats;
+static void hr_update(hr_stats_t *stats)
+{
+    /*
+       Update some time decayed EMA hashrates.
+    */
+    time_t now = time(NULL);
+    double t = difftime(now, stats->last_calc);
+    if (t <= 0)
+        return;
+    double h = stats->diff_since.load();
+    double d, p, z;
+    unsigned i = sizeof(hr_intervals)/sizeof(hr_intervals[0]);
+    while (i--)
+    {
+        unsigned inter = hr_intervals[i];
+        double *f = &stats->avg[i];
+        d = t/inter;
+        if (d > 32)
+            d = 32;
+        p = 1 - 1.0 / exp(d);
+        z = 1 + p;
+        *f += (h / t * p);
+        *f /= z;
+        if (*f < 2e-16)
+            *f = 0;
+    }
+    stats->diff_since.store(0);
+    stats->last_calc = now;
+}
 
 void verifyThread(int taskGroupID)
 {
@@ -608,6 +647,7 @@ void verifyThread(int taskGroupID)
                     std::string job_hex(buf);
                     job_hex = job_hex + "_comp" + std::to_string(computorId);
                     addRecord(database->get_env(), share_db, job_hex, str_share_value);
+                    monitor_stats.diff_since.fetch_add(0xffffffffffffffff/matched_task.m_target);
                 }
             }
             else
@@ -1340,9 +1380,11 @@ int run(int argc, char *argv[]) {
 
     SLEEP(3000);
     int curEpoch = getCurrentEpoch();
+    memset(&monitor_stats, 0, sizeof(monitor_stats));
     while (!shouldExit)
     {
-        printf("Active peer: %d | Valid: %lu | Invalid: %lu | Stale: %lu | Submit: %lu\n", nPeer.load(), gValid.load(), gInValid.load(), gStale.load(), gSubmittedSols.load());
+        hr_update(&monitor_stats);
+        printf("Active peer: %d | Valid: %lu | Invalid: %lu | Stale: %lu | Submit: %lu | Expected HR: %.2f Mhs\n", nPeer.load(), gValid.load(), gInValid.load(), gStale.load(), gSubmittedSols.load(), monitor_stats.avg[0]/1e6);
         SLEEP(10000);
         {
             if (getCurrentEpoch() != curEpoch)
