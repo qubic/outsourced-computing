@@ -23,6 +23,118 @@ uint8_t operatorSubSeed[32]= {0};
 uint8_t operatorPrivateKey[32]= {0};
 char operatorPublicIdentity[128] = {0};
 
+// The LMDB C header
+#include <iostream>
+#include <string>
+#include <vector>
+#include <stdexcept>
+#include <string_view>
+#include <algorithm> // For std::for_each
+#include <lmdb.h>
+
+// --- Helper from previous example ---
+void check(int rc) {
+    if (rc != MDB_SUCCESS) {
+        throw std::runtime_error(mdb_strerror(rc));
+    }
+}
+
+/**
+ * @brief Manages the LMDB environment and its database handles (DBIs).
+ *
+ * This class handles opening the environment and ensures it is properly
+ * closed when the object goes out of scope.
+ */
+class Database {
+public:
+    Database(const char* path) {
+        check(mdb_env_create(&env));
+        // Set a reasonable map size
+        check(mdb_env_set_mapsize(env, 1024 * 1024 * 100)); // 100 MB
+        // Allow up to 10 named databases
+        check(mdb_env_set_maxdbs(env, 10));
+        // Open the environment
+        check(mdb_env_open(env, path, MDB_WRITEMAP | MDB_NOSYNC, 0644));
+    }
+
+    // RAII: The destructor ensures the environment is closed.
+    ~Database() {
+        mdb_env_close(env);
+    }
+
+    // Deleted copy constructor and assignment operator to prevent copying.
+    Database(const Database&) = delete;
+    Database& operator=(const Database&) = delete;
+
+    /**
+     * @brief Opens a database handle (MDB_dbi) and stores it for reuse.
+     *
+     * This should be called once per database during initialization.
+     * @param db_name The name of the database. Use nullptr for the main DB.
+     * @return The handle to the opened database.
+     */
+    MDB_dbi open_db(const char* db_name) {
+        // A write transaction is required to use MDB_CREATE.
+        MDB_txn *txn;
+        check(mdb_txn_begin(env, nullptr, 0, &txn));
+
+        MDB_dbi dbi;
+        check(mdb_dbi_open(txn, db_name, MDB_CREATE, &dbi));
+
+        // We commit the transaction immediately. The DBI handle is now valid
+        // for the lifetime of the environment.
+        check(mdb_txn_commit(txn));
+
+        // Store the handle in our map for potential future lookups if needed.
+        std::string name = (db_name == nullptr) ? "__main__" : db_name;
+        db_handles[name] = dbi;
+
+        return dbi;
+    }
+
+    // Provides access to the raw environment pointer for other functions.
+    MDB_env* get_env() {
+        return env;
+    }
+
+private:
+    MDB_env* env;
+    std::map<std::string, MDB_dbi> db_handles;
+};
+
+/**
+ * @brief Adds a record using a pre-opened MDB_dbi handle.
+ *
+ * This version is more efficient as it no longer calls mdb_dbi_open.
+ */
+void addRecord(MDB_env* env, MDB_dbi dbi, const std::string_view& key, const std::string_view& value) {
+    MDB_txn *txn = nullptr;
+    try {
+        check(mdb_txn_begin(env, nullptr, 0, &txn));
+
+        MDB_val mdb_key{key.length(), (void*)key.data()};
+        MDB_val mdb_value{value.length(), (void*)value.data()};
+
+        check(mdb_put(txn, dbi, &mdb_key, &mdb_value, 0));
+
+        check(mdb_txn_commit(txn));
+        txn = nullptr;
+    } catch (...) {
+        if (txn) mdb_txn_abort(txn);
+        throw;
+    }
+}
+
+Database* database;
+MDB_dbi share_db;
+void setupDB()
+{
+    printf("Initializing DB...\n");
+    database = new Database("./database");
+    share_db = database->open_db("shares");
+}
+
+
 #define DUMMY_TEST 0
 std::mutex gDummyLock;
 unsigned long long gDummyCounter = 0;
@@ -487,6 +599,16 @@ void verifyThread(int taskGroupID)
                     std::lock_guard<std::mutex> g(compScoreLock);
                     compScore[computorId]++;
                 }
+                {
+                    uint64_t share_value = 0xffffffffffffffffULL/v;
+                    std::string str_share_value = std::to_string(share_value);
+                    char buf[128*2] = {0};;
+                    if (blob.size() >= 128) continue;
+                    byteToHex(blob.data(), buf, blob.size());
+                    std::string job_hex(buf);
+                    job_hex = job_hex + "_comp" + std::to_string(computorId);
+                    addRecord(database->get_env(), share_db, job_hex, str_share_value);
+                }
             }
             else
             {
@@ -496,7 +618,7 @@ void verifyThread(int taskGroupID)
                     verifedSol.isValid = 0;
                 }
                 gInValid.fetch_add(1);
-//                printf("Invalid Share from comp %d: %s\n", computorId, hex);
+                printf("Invalid Share from comp %d: %s\n", computorId, hex);
             }
             gReportedSolutionsVec.push_back(verifedSol);
         }
@@ -1141,6 +1263,8 @@ int run(int argc, char *argv[]) {
             return 1;
         }
     }
+
+    setupDB();
 
     // Print parsed values
     if (!seed.empty())
