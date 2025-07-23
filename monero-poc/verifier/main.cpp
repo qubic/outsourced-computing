@@ -50,7 +50,7 @@ public:
     Database(const char* path) {
         check(mdb_env_create(&env));
         // Set a reasonable map size
-        check(mdb_env_set_mapsize(env, 1024 * 1024 * 100)); // 100 MB
+        check(mdb_env_set_mapsize(env, 1024 * 1024 * 1024)); // 1GiB
         // Allow up to 10 named databases
         check(mdb_env_set_maxdbs(env, 10));
         // Open the environment
@@ -1139,11 +1139,7 @@ bool fetchCustomMiningData(QCPtr pConnection, const char* logHeader)
                     for (int i = 0; i < respondDataHeader.itemCount; i++)
                     {
                         XMRTask rawTask = pTask[i];
-
-                        lastReceivedTaskTs = rawTask.taskIndex > lastReceivedTaskTs ? rawTask.taskIndex : lastReceivedTaskTs;
-                        //printTaskInfo<XMRTask>(&rawTask, logHeader);
-                        task tk = rawTask.convertToTask();
-                        // Update the task
+                        lastReceivedTaskTs = rawTask.taskIndex;
                         nodeTasks[rawTask.taskIndex] = rawTask;
                     }
 
@@ -1153,7 +1149,7 @@ bool fetchCustomMiningData(QCPtr pConnection, const char* logHeader)
                     auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
                     for (auto it = nodeTasks.begin(); it != nodeTasks.end(); )
                     {
-                        if (std::abs((int64_t)it->first - (int64_t)(milliseconds) > OFFSET_TIME_STAMP_IN_MS))
+                        if (std::abs((int64_t)(it->first) - (int64_t)(milliseconds)) > OFFSET_TIME_STAMP_IN_MS)
                         {
                             it = nodeTasks.erase(it);
                         }
