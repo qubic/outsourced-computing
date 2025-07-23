@@ -97,9 +97,74 @@ public:
         return env;
     }
 
+    /**
+     * @brief Checks the database size and deletes the oldest records if it exceeds a threshold.
+     * @param db_name The name of the database to clean up.
+     * @param max_size_bytes The size threshold in bytes (e.g., 800 * 1024 * 1024).
+     * @param records_to_delete The number of oldest records to delete when the threshold is reached.
+     */
+    void cleanup_db_if_needed(const char* db_name, size_t max_size_bytes, int records_to_delete) {
+        size_t current_size = get_current_size_bytes();
+
+        if (current_size > max_size_bytes) {
+            std::cout << "Database size (" << current_size / (1024*1024) << "MB) exceeds threshold ("
+                      << max_size_bytes / (1024*1024) << "MB). Cleaning up..." << std::endl;
+
+            // Find the correct database handle (dbi)
+            std::string name_str = (db_name == nullptr) ? "__main__" : db_name;
+            if (db_handles.find(name_str) == db_handles.end()) {
+                std::cerr << "Error: Database '" << name_str << "' not opened." << std::endl;
+                return;
+            }
+            MDB_dbi dbi = db_handles[name_str];
+
+            MDB_txn *txn;
+            MDB_cursor *cursor;
+            MDB_val key;
+
+            // Start a write transaction
+            check(mdb_txn_begin(env, nullptr, 0, &txn));
+            check(mdb_cursor_open(txn, dbi, &cursor));
+
+            int deleted_count = 0;
+            // Loop to delete the specified number of oldest records
+            for (int i = 0; i < records_to_delete; ++i) {
+                // Position cursor at the first (oldest) key
+                int rc = mdb_cursor_get(cursor, &key, nullptr, MDB_FIRST);
+                if (rc == MDB_SUCCESS) {
+                    // Delete the current record
+                    if (mdb_del(txn, dbi, &key, nullptr) == MDB_SUCCESS) {
+                        deleted_count++;
+                    }
+                } else if (rc == MDB_NOTFOUND) {
+                    // No more records to delete
+                    break;
+                } else {
+                    // Handle other potential errors
+                    check(rc);
+                }
+            }
+
+            // Clean up cursor and commit transaction
+            mdb_cursor_close(cursor);
+            check(mdb_txn_commit(txn));
+
+            std::cout << "Cleanup finished. Deleted " << deleted_count << " records." << std::endl;
+        }
+    }
+
 private:
     MDB_env* env;
     std::map<std::string, MDB_dbi> db_handles;
+    size_t get_current_size_bytes() {
+        MDB_envinfo info;
+        check(mdb_env_info(env, &info));
+        MDB_stat stat;
+        check(mdb_env_stat(env, &stat));
+
+        // The used size is the total number of pages used times the page size.
+        return (stat.ms_leaf_pages + stat.ms_branch_pages + stat.ms_overflow_pages) * stat.ms_psize;
+    }
 };
 
 /**
@@ -1381,6 +1446,7 @@ int run(int argc, char *argv[]) {
     {
         hr_update(&monitor_stats);
         printf("Active peer: %d | Valid: %lu | Invalid: %lu | Stale: %lu | Submit: %lu | Expected HR: %.2f Mhs\n", nPeer.load(), gValid.load(), gInValid.load(), gStale.load(), gSubmittedSols.load(), monitor_stats.avg[0]/1e6);
+        database->cleanup_db_if_needed("shares", 800ULL * 1024 * 1024, 10000);
         SLEEP(10000);
         {
             if (getCurrentEpoch() != curEpoch)
