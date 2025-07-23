@@ -1319,7 +1319,10 @@ void loadScore()
     if (fileExists(file_name))
     {
         FILE* f = fopen(file_name.c_str(), "rb");
-        fread(compScore, 1, sizeof(compScore), f);
+        if (fread(compScore, 1, sizeof(compScore), f) != sizeof(compScore))
+        {
+            printf("Error while reading file\n");
+        }
         fclose(f);
     }
     else
