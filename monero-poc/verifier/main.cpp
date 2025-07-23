@@ -23,6 +23,118 @@ uint8_t operatorSubSeed[32]= {0};
 uint8_t operatorPrivateKey[32]= {0};
 char operatorPublicIdentity[128] = {0};
 
+// The LMDB C header
+#include <iostream>
+#include <string>
+#include <vector>
+#include <stdexcept>
+#include <string_view>
+#include <algorithm> // For std::for_each
+#include <lmdb.h>
+
+// --- Helper from previous example ---
+void check(int rc) {
+    if (rc != MDB_SUCCESS) {
+        throw std::runtime_error(mdb_strerror(rc));
+    }
+}
+
+/**
+ * @brief Manages the LMDB environment and its database handles (DBIs).
+ *
+ * This class handles opening the environment and ensures it is properly
+ * closed when the object goes out of scope.
+ */
+class Database {
+public:
+    Database(const char* path) {
+        check(mdb_env_create(&env));
+        // Set a reasonable map size
+        check(mdb_env_set_mapsize(env, 1024 * 1024 * 1024)); // 1GiB
+        // Allow up to 10 named databases
+        check(mdb_env_set_maxdbs(env, 10));
+        // Open the environment
+        check(mdb_env_open(env, path, MDB_WRITEMAP | MDB_NOSYNC, 0644));
+    }
+
+    // RAII: The destructor ensures the environment is closed.
+    ~Database() {
+        mdb_env_close(env);
+    }
+
+    // Deleted copy constructor and assignment operator to prevent copying.
+    Database(const Database&) = delete;
+    Database& operator=(const Database&) = delete;
+
+    /**
+     * @brief Opens a database handle (MDB_dbi) and stores it for reuse.
+     *
+     * This should be called once per database during initialization.
+     * @param db_name The name of the database. Use nullptr for the main DB.
+     * @return The handle to the opened database.
+     */
+    MDB_dbi open_db(const char* db_name) {
+        // A write transaction is required to use MDB_CREATE.
+        MDB_txn *txn;
+        check(mdb_txn_begin(env, nullptr, 0, &txn));
+
+        MDB_dbi dbi;
+        check(mdb_dbi_open(txn, db_name, MDB_CREATE, &dbi));
+
+        // We commit the transaction immediately. The DBI handle is now valid
+        // for the lifetime of the environment.
+        check(mdb_txn_commit(txn));
+
+        // Store the handle in our map for potential future lookups if needed.
+        std::string name = (db_name == nullptr) ? "__main__" : db_name;
+        db_handles[name] = dbi;
+
+        return dbi;
+    }
+
+    // Provides access to the raw environment pointer for other functions.
+    MDB_env* get_env() {
+        return env;
+    }
+
+private:
+    MDB_env* env;
+    std::map<std::string, MDB_dbi> db_handles;
+};
+
+/**
+ * @brief Adds a record using a pre-opened MDB_dbi handle.
+ *
+ * This version is more efficient as it no longer calls mdb_dbi_open.
+ */
+void addRecord(MDB_env* env, MDB_dbi dbi, const std::string_view& key, const std::string_view& value) {
+    MDB_txn *txn = nullptr;
+    try {
+        check(mdb_txn_begin(env, nullptr, 0, &txn));
+
+        MDB_val mdb_key{key.length(), (void*)key.data()};
+        MDB_val mdb_value{value.length(), (void*)value.data()};
+
+        check(mdb_put(txn, dbi, &mdb_key, &mdb_value, 0));
+
+        check(mdb_txn_commit(txn));
+        txn = nullptr;
+    } catch (...) {
+        if (txn) mdb_txn_abort(txn);
+        throw;
+    }
+}
+
+Database* database;
+MDB_dbi share_db;
+void setupDB()
+{
+    printf("Initializing DB...\n");
+    database = new Database("./database");
+    share_db = database->open_db("shares");
+}
+
+
 #define DUMMY_TEST 0
 std::mutex gDummyLock;
 unsigned long long gDummyCounter = 0;
@@ -36,6 +148,8 @@ struct
 } gTaskPartition[NUMBER_OF_TASK_PARTITIONS];
 uint16_t gComputorPartitionMap[NUMBER_OF_COMPUTORS];
 
+uint64_t compScore[676];
+std::mutex compScoreLock;
 
 #if DUMMY_TEST
 #define OPERATOR_PORT 31841
@@ -372,11 +486,54 @@ void submitVerifiedSolution(const char* nodeIp)
     }
 }
 
+const unsigned hr_intervals[] = {120,600,1800,3600,86400,604800};
+
+typedef struct hr_stats_t
+{
+    time_t last_calc;
+    std::atomic<uint64_t> diff_since;
+    /* 2m, 10m, 30m, 1h, 1d, 1w */
+    double avg[6];
+} hr_stats_t;
+hr_stats_t monitor_stats;
+static void hr_update(hr_stats_t *stats)
+{
+    /*
+       Update some time decayed EMA hashrates.
+    */
+    time_t now = time(NULL);
+    double t = difftime(now, stats->last_calc);
+    if (t <= 0)
+        return;
+    double h = stats->diff_since.load();
+    double d, p, z;
+    unsigned i = sizeof(hr_intervals)/sizeof(hr_intervals[0]);
+    while (i--)
+    {
+        unsigned inter = hr_intervals[i];
+        double *f = &stats->avg[i];
+        d = t/inter;
+        if (d > 32)
+            d = 32;
+        p = 1 - 1.0 / exp(d);
+        z = 1 + p;
+        *f += (h / t * p);
+        *f /= z;
+        if (*f < 2e-16)
+            *f = 0;
+    }
+    stats->diff_since.store(0);
+    stats->last_calc = now;
+}
 
 void verifyThread(int taskGroupID)
 {
     task local_task;
+    task prevLocal_task;
+    task prevPrevLocal_task;
     memset(&local_task, 0, sizeof(task));
+    memset(&prevLocal_task, 0, sizeof(task));
+    memset(&prevPrevLocal_task, 0, sizeof(task));
     randomx_flags flags = randomx_get_flags();
     randomx_cache *cache = randomx_alloc_cache(flags);
     randomx_init_cache(cache, local_task.m_seed, 32);
@@ -392,6 +549,8 @@ void verifyThread(int taskGroupID)
                 randomx_init_cache(cache, currentTask[taskGroupID].m_seed, 32);
                 randomx_vm_set_cache(vm, cache);
             }
+            prevPrevLocal_task = prevLocal_task;
+            prevLocal_task = local_task;
             local_task = currentTask[taskGroupID];
         }
         solution candidate;
@@ -411,7 +570,7 @@ void verifyThread(int taskGroupID)
                 std::vector<std::pair<uint64_t,uint32_t>> to_be_delete;
                 for (auto const& item : mTaskNonce[taskGroupID])
                 {
-                    if (item.first.first < currentTask[taskGroupID].taskIndex)
+                    if (item.first.first < prevPrevLocal_task.taskIndex)
                     {
                         to_be_delete.push_back(item.first);
                     }
@@ -431,38 +590,65 @@ void verifyThread(int taskGroupID)
                 continue;
             }
 
-            if (candidate._taskIndex < local_task.taskIndex)
-            {
-                gStale.fetch_add(1);
-                printf("Stale Share from comp %d\n", computorId);
-                continue;
-            }
-            else if (candidate._taskIndex > local_task.taskIndex)
+            task matched_task;
+            if (candidate._taskIndex > local_task.taskIndex)
             {
                 printf("Do not expected: Missing task - check your peers\n");
                 continue;
             }
+            else if (candidate._taskIndex == local_task.taskIndex)
+            {
+                matched_task = local_task;
+            }
+            else if (candidate._taskIndex == prevLocal_task.taskIndex)
+            {
+                matched_task = prevLocal_task;
+            }
+            else if (candidate._taskIndex == prevPrevLocal_task.taskIndex)
+            {
+                matched_task = prevPrevLocal_task;
+            } else {
+                gStale.fetch_add(1);
+                printf("Stale Share from comp %d\n", computorId);
+                continue;
+            }
+
             uint8_t out[32];
             std::vector<uint8_t> blob;
-            blob.resize(local_task.m_size, 0);
-            memcpy(blob.data(), local_task.m_blob, local_task.m_size);
+            blob.resize(matched_task.m_size, 0);
+            memcpy(blob.data(), matched_task.m_blob, matched_task.m_size);
             uint32_t nonce = candidate.nonce;
             memcpy(blob.data() + XMR_NONCE_POS, &nonce, 4);
-            randomx_calculate_hash(vm, blob.data(), local_task.m_size, out);
+            randomx_calculate_hash(vm, blob.data(), matched_task.m_size, out);
             uint64_t v = ((uint64_t*)out)[3];
             char hex[64];
             byteToHex(out, hex, 32);
 
             RequestedCustomMiningSolutionVerification verifedSol;
             verifedSol.nonce = candidate.nonce;
-            verifedSol.taskIndex = local_task.taskIndex;
+            verifedSol.taskIndex = matched_task.taskIndex;
             //verifedSol.padding = candidate.padding;
 
-            if (v < local_task.m_target)
+            if (v < matched_task.m_target)
             {
                 verifedSol.isValid = 1;
                 gValid.fetch_add(1);
-                printf("Valid Share from comp %d: %s\n", computorId, hex);
+//                printf("Valid Share from comp %d: %s\n", computorId, hex);
+                {
+                    std::lock_guard<std::mutex> g(compScoreLock);
+                    compScore[computorId]++;
+                }
+                {
+                    uint64_t share_value = 0xffffffffffffffffULL/v;
+                    std::string str_share_value = std::to_string(share_value);
+                    char buf[128*2] = {0};;
+                    if (blob.size() >= 128) continue;
+                    byteToHex(blob.data(), buf, blob.size());
+                    std::string job_hex(buf);
+                    job_hex = job_hex + "_comp" + std::to_string(computorId);
+                    addRecord(database->get_env(), share_db, job_hex, str_share_value);
+                    monitor_stats.diff_since.fetch_add(0xffffffffffffffff/matched_task.m_target);
+                }
             }
             else
             {
@@ -645,7 +831,7 @@ void listenerThread(const char* nodeIp)
                     debug_log += std::string(dbg); memset(dbg, 0, sizeof(dbg));
                     sprintf(dbg, " | height %lu\n", tk->m_height);
                     debug_log += std::string(dbg); memset(dbg, 0, sizeof(dbg));
-                    printf("%s", debug_log.c_str());
+//                    printf("%s", debug_log.c_str());
                 }
                 // TODO: help relaying the messages to connected peers
 
@@ -765,8 +951,8 @@ void verifySolutionFromNode(const XMRTask& rTask, std::vector<XMRSolution>& rSol
         solution candidate = it.convertToSol();
 
         // Dummy test, for each 2 valid solution, the next one will be invalid
-        bool dummyInvalid = false;
         #if DUMMY_TEST
+        bool dummyInvalid = false;
         {
             std::lock_guard<std::mutex> dummyLock(gDummyLock);
             gDummyCounter++;
@@ -793,13 +979,17 @@ void verifySolutionFromNode(const XMRTask& rTask, std::vector<XMRSolution>& rSol
         {
             verifedSol.isValid = 1;
             gValid.fetch_add(1);
-            printf("Valid Share for comp %d: %s\n", computorID, hex);
+//            printf("Valid Share for comp %d: %s\n", computorID, hex);
+            {
+                std::lock_guard<std::mutex> g(compScoreLock);
+                compScore[computorID]++;
+            }
         }
         else
         {
             verifedSol.isValid = 0;
             gInValid.fetch_add(1);
-            printf("Invalid Share for comp %d: %s\n", computorID, hex);
+//            printf("Invalid Share for comp %d: %s\n", computorID, hex);
         }
         // Save the solution for sending to node this is an invalidate solutions
         {
@@ -949,11 +1139,7 @@ bool fetchCustomMiningData(QCPtr pConnection, const char* logHeader)
                     for (int i = 0; i < respondDataHeader.itemCount; i++)
                     {
                         XMRTask rawTask = pTask[i];
-
-                        lastReceivedTaskTs = rawTask.taskIndex > lastReceivedTaskTs ? rawTask.taskIndex : lastReceivedTaskTs;
-                        //printTaskInfo<XMRTask>(&rawTask, logHeader);
-                        task tk = rawTask.convertToTask();
-                        // Update the task
+                        lastReceivedTaskTs = rawTask.taskIndex;
                         nodeTasks[rawTask.taskIndex] = rawTask;
                     }
 
@@ -963,7 +1149,7 @@ bool fetchCustomMiningData(QCPtr pConnection, const char* logHeader)
                     auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
                     for (auto it = nodeTasks.begin(); it != nodeTasks.end(); )
                     {
-                        if (std::abs((int64_t)it->first - (int64_t)(milliseconds) > OFFSET_TIME_STAMP_IN_MS))
+                        if (std::abs((int64_t)(it->first) - (int64_t)(milliseconds)) > OFFSET_TIME_STAMP_IN_MS)
                         {
                             it = nodeTasks.erase(it);
                         }
@@ -1053,6 +1239,30 @@ void printHelp()
     printf("./oc_verifier --seed [OPERATOR SEED] --nodeip [OPERATOR node ip] --peers [nodeip0],[nodeip1], ... ,[nodeipN]\n");
 }
 
+void saveScore()
+{
+    std::lock_guard<std::mutex> g(compScoreLock);
+    std::string file_name = "compScore." + std::to_string(getCurrentEpoch()) + ".bin";
+    FILE* f = fopen(file_name.c_str(), "wb");
+    fwrite(compScore, 1, sizeof(compScore), f);
+    fclose(f);
+}
+void loadScore()
+{
+    std::lock_guard<std::mutex> g(compScoreLock);
+    std::string file_name = "compScore." + std::to_string(getCurrentEpoch()) + ".bin";
+    if (fileExists(file_name))
+    {
+        FILE* f = fopen(file_name.c_str(), "rb");
+        fread(compScore, 1, sizeof(compScore), f);
+        fclose(f);
+    }
+    else
+    {
+        memset(compScore, 0, sizeof(compScore));
+    }
+}
+
 int run(int argc, char *argv[]) {
     if (argc == 1) {
         printHelp();
@@ -1089,6 +1299,8 @@ int run(int argc, char *argv[]) {
             return 1;
         }
     }
+
+    setupDB();
 
     // Print parsed values
     if (!seed.empty())
@@ -1130,6 +1342,7 @@ int run(int argc, char *argv[]) {
     }
 
     getPublicKeyFromIdentity(DISPATCHER, dispatcherPubkey);
+    loadScore();
     std::vector<std::thread> thr;
 
     // Fetch task from peers
@@ -1162,10 +1375,23 @@ int run(int argc, char *argv[]) {
     }
 
     SLEEP(3000);
+    int curEpoch = getCurrentEpoch();
+    memset(&monitor_stats, 0, sizeof(monitor_stats));
     while (!shouldExit)
     {
-        printf("Active peer: %d | Valid: %lu | Invalid: %lu | Stale: %lu | Submit: %lu\n", nPeer.load(), gValid.load(), gInValid.load(), gStale.load(), gSubmittedSols.load());
+        hr_update(&monitor_stats);
+        printf("Active peer: %d | Valid: %lu | Invalid: %lu | Stale: %lu | Submit: %lu | Expected HR: %.2f Mhs\n", nPeer.load(), gValid.load(), gInValid.load(), gStale.load(), gSubmittedSols.load(), monitor_stats.avg[0]/1e6);
         SLEEP(10000);
+        {
+            if (getCurrentEpoch() != curEpoch)
+            {
+                memset(compScore, 0, sizeof(compScore));
+            }
+            else
+            {
+                saveScore();
+            }
+        }
     }
     cleanRandomX();
 
