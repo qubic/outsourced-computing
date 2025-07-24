@@ -23,11 +23,26 @@ if(CMAKE_C_COMPILER MATCHES "gcc")
 else()
 	message(FATAL_ERROR "Must use gcc/g++ to compile")
 endif()
+
+set(XMR_ROOT "/root/monero/" CACHE PATH "Monero root folder")
+message(STATUS "This project requires monero header files to compile")
+message(STATUS "Setting XMR_ROOT at: " ${XMR_ROOT})
+include_directories(${XMR_ROOT}/src/)
+include_directories(${XMR_ROOT}/external/)
+include_directories(${XMR_ROOT}/external/easylogging++/)
+include_directories(${XMR_ROOT}/contrib/epee/include/)
+
+message(WARNING "This project is using many precompiled libraries, it is recommended to use your own library version")
+
 SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} ${CXX_OCVERIFIER_FLAGS}")
 SET(FILES ${CMAKE_SOURCE_DIR}/connection.cpp
 		${CMAKE_SOURCE_DIR}/keyUtils.cpp
+		${CMAKE_SOURCE_DIR}/xmr.cpp
 )
-add_subdirectory(RandomX)
+link_directories(${CMAKE_SOURCE_DIR}/precompiledMoneroLibraries/)
 ADD_EXECUTABLE(oc_verifier main.cpp ${FILES})
-target_link_libraries(oc_verifier pthread randomx lmdb)
+target_link_libraries(oc_verifier pthread lmdb pthread cryptonote_basic cncrypto common ringct_basic device
+		cryptonote_format_utils_basic wallet-crypto epee easylogging version randomx boost_system boost_date_time
+		boost_chrono boost_filesystem boost_thread boost_regex boost_serialization boost_program_options sodium
+		unbound ssl crypto hidapi-libusb dl)
 set_property(TARGET oc_verifier PROPERTY COMPILE_WARNING_AS_ERROR ON)
