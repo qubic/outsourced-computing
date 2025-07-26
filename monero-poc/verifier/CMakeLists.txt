@@ -40,9 +40,16 @@ SET(FILES ${CMAKE_SOURCE_DIR}/connection.cpp
 		${CMAKE_SOURCE_DIR}/xmr.cpp
 )
 link_directories(${CMAKE_SOURCE_DIR}/precompiledMoneroLibraries/)
+add_library(oc_verifier_lib STATIC verifierLib.cpp xmr.cpp)
 ADD_EXECUTABLE(oc_verifier main.cpp ${FILES})
-target_link_libraries(oc_verifier pthread lmdb pthread cryptonote_basic cncrypto common ringct_basic device
+
+target_link_libraries(oc_verifier pthread lmdb oc_verifier_lib cryptonote_basic cncrypto common ringct_basic device
 		cryptonote_format_utils_basic wallet-crypto epee easylogging version randomx boost_system boost_date_time
 		boost_chrono boost_filesystem boost_thread boost_regex boost_serialization boost_program_options sodium
 		unbound ssl crypto hidapi-libusb dl)
+target_link_libraries(oc_verifier_lib cryptonote_basic cncrypto common ringct_basic device
+		cryptonote_format_utils_basic wallet-crypto epee easylogging version randomx boost_system boost_date_time
+		boost_chrono boost_filesystem boost_thread boost_regex boost_serialization boost_program_options sodium
+		unbound ssl crypto hidapi-libusb dl)
+target_compile_options(oc_verifier_lib PRIVATE -Ofast)
 set_property(TARGET oc_verifier PROPERTY COMPILE_WARNING_AS_ERROR ON)

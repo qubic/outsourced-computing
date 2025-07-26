@@ -15,6 +15,7 @@
 #include <sstream>
 #include <iostream>
 #include <csignal>
+#include "verifierLib.h"
 
 #define DISPATCHER "XPXYKFLGSWRHRGAUKWFWVXCDVEYAPCPCNUTMUDWFGDYQCWZNJMWFZEEGCFFO"
 uint8_t dispatcherPubkey[32] = {0};
@@ -220,38 +221,7 @@ std::mutex compScoreLock;
 #define PORT 21841
 #define SLEEP(x) std::this_thread::sleep_for(std::chrono::milliseconds (x));
 bool shouldExit = false;
-struct task
-{
-    uint8_t sourcePublicKey[32]; // the source public key is the DISPATCHER public key
-    uint8_t zero[32];  // empty/zero 0
-    uint8_t gammingNonce[32];
 
-    unsigned long long taskIndex;
-    unsigned char m_template[896];
-    unsigned long long m_extraNonceOffset;
-    unsigned long long m_size;
-    unsigned long long m_target;
-    unsigned long long m_height;
-    unsigned char m_seed[32];
-
-    uint8_t signature[64];
-};
-
-struct solution
-{
-    uint8_t sourcePublicKey[32];
-    uint8_t zero[32]; // empty/zero 0
-    uint8_t gammingNonce[32];
-
-    unsigned long long _taskIndex;
-    unsigned long long _nonceu64; // (extraNonce<<32) | nonce
-    unsigned long long reserve0;
-    unsigned long long reserve1;
-    unsigned long long reserve2;
-
-    uint8_t result[32];   // xmrig::JobResult.result
-    uint8_t signature[64];
-} ;
 
 //struct XMRTask
 //{
@@ -562,6 +532,55 @@ static void hr_update(hr_stats_t *stats)
     stats->diff_since.store(0);
     stats->last_calc = now;
 }
+
+//void quickVerify()
+//{
+//    uint8_t m_seed[32];
+//    uint32_t m_size =793;
+//
+//    hexToByte("b8b1c5be5126ef6afa740e165991248f517cb483a61d89855a900d8442836821", m_seed, 32);
+//    randomx_flags flags = randomx_get_flags();
+//    randomx_cache *cache = randomx_alloc_cache(flags);
+//    randomx_init_cache(cache, m_seed, 32);
+//    randomx_vm *vm = randomx_create_vm(flags, cache, NULL);
+//
+//    uint8_t out[32];
+//    std::vector<uint8_t> block_template;
+//    block_template.resize(m_size, 0);
+//    hexToByte("1010eec38dc406e72a0e2daae050f6300957146551bda766ca3ad12c7688257fc6d83cc883be530000000002e5b0d30101ffa9b0d30101a0a0b1b398140365851f32778c53df87d07743481a812c2b6d2ab9fc6bcb542b67779fbc35cc347a57032100a1a5b1ce9bc24dfeb4f701f23d021ec0e3181865a6538cd348d72fda36c753d4010c1dae3edb352cf2be533c6ce16699679ab363fe00b570bfd790109c89e5e2d7021124cf0000b77da01200000000000000000000138b59a58e720c4208ea3d0da16ee786018d8f9488b456d66b61d4f5dd514d8fe45f7be4373f07b5acc993abe455a386932c9c0f0d24b8312b5e9e8d47e6aa0aecebecf0582904f13f004a960239d1b9d377749a1877033a9173371632a17b118ec58e8ac62570f72c558b1ff81eae4ac77e7e68e37dbb92d431c03f1b058113b83eb6363186004e773660f351b648734b9226598c65e3366546b8b1a7d14f9f2b2b528c651911c228370fc442c364ae45c04fa02379a77948a5b044679850cdb9186c97e9dbc74f3f37140966033e878cf241386fc4de3e754698c2289447d02b5fbe28b4774930cdae5ca94a60633cffbb340c753ef3b78582e18779bedba84545ad0ebdbbd7be677c32f17a139eb2b27a2ec42c2f007c07d53b8d7433e226d21c8ba76f680e6029044597111d1bdf5d0facc53db0379ce2e5972f6f9fc025fab9e978cdf2b1f4fb5a437a315d64672b9d70aa3a921435f6403b1ee1c787f0b5615d28176a7dbb0a293994ba2e0f158abdef6976a14f049fc18f8b59f01717338afba5aef1986571ee5c5eef04efe375e9284149f4a55317c84500ae68f64e4759f366a07eb5cb83d4eac81e56caa5b9df63fb8d7f5254df07fe74606699a3ebc80a0165ea7680452e5a0f2fd74a225c84224b5228c5a60284da7e97eb4f76b06219a1985c999dd72873c94ab92be2d3e35d3da40b86824a01595a223ee80198f49a69a87201cc8ca4b806fb3de267575ffba4528a3e125f166fe89ef0bf2561ab12914afda7b212f16c646d9b35c89c9c5b0691a8e84ff0520cf6e1cb28eecb1d4b8402ac077cefc417de3559651a5c0361a76ef3fe35ad7b7b77da3e29d24c", block_template.data(), m_size);
+//
+//    // extract nonce
+//    uint32_t extraNonce = 2147724962;
+//    uint32_t nonceu32 = __builtin_bswap32(0xFCD00700);
+//    uint32_t m_extraNonceOffset = 174;
+//    memcpy(block_template.data() + m_extraNonceOffset, &extraNonce, 4);
+//    uint8_t hashing_blob[256] = {0};
+//    size_t hashing_blob_size = 0;
+//
+//    // convert from block template to minign blob
+//    get_hashing_blob(block_template.data(), m_size, hashing_blob, &hashing_blob_size);
+//    memcpy(hashing_blob + XMR_NONCE_POS, &nonceu32, 4);
+//    for (int i = 0; i < hashing_blob_size; i++) printf("%02x", hashing_blob[i]); printf("\n");
+//
+//    // do the hash
+//    randomx_calculate_hash(vm, hashing_blob, hashing_blob_size, out);
+//
+//    uint64_t v = ((uint64_t*)out)[3];
+//    char hex[66] = {0};
+//    byteToHex(out, hex, 32);
+//    uint64_t m_target = 28823037615;
+//    if (v < m_target)
+//    {
+//        printf("PASSED\n");
+//    }
+//    else
+//    {
+//        printf("FAILED\n");
+//        printf("%s\n", hex);
+//    }
+//    randomx_destroy_vm(vm);
+//    randomx_release_cache(cache);
+//}
 
 void verifyThread(int ignore)
 {
@@ -1393,7 +1412,7 @@ int run(int argc, char *argv[]) {
 }
 
 int main(int argc, char *argv[]) {
-
+//    quickVerify();
 #ifndef _MSC_VER
     // Ignore SIGPIPE globally
     std::signal(SIGPIPE, SIG_IGN);
