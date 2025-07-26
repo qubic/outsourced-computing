@@ -37,7 +37,6 @@ message(WARNING "This project is using many precompiled libraries, it is recomme
 SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} ${CXX_OCVERIFIER_FLAGS}")
 SET(FILES ${CMAKE_SOURCE_DIR}/connection.cpp
 		${CMAKE_SOURCE_DIR}/keyUtils.cpp
-		${CMAKE_SOURCE_DIR}/xmr.cpp
 )
 link_directories(${CMAKE_SOURCE_DIR}/precompiledMoneroLibraries/)
 add_library(oc_verifier_lib STATIC verifierLib.cpp xmr.cpp)

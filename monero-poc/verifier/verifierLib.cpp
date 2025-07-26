@@ -39,7 +39,7 @@ void destroySolVerifier(void* ptr_)
     delete ptr;
 }
 
-bool verify(void *ptr_, task* _task, solution * _sol, uint8_t* out)
+bool verify(void *ptr_, const task* _task, const solution * _sol, uint8_t* out)
 {
     auto ptr = (rxStruct*)(ptr_);
     if (memcmp(ptr->currentSeed, _task->m_seed, 32) != 0)

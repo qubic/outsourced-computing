@@ -48,9 +48,9 @@ void* createOCVerifier();
 void destroySolVerifier(void* ptr_);
 
 /*
- * Calculating score from pubkey(32 bytes) and nonce(32 bytes)
+ * Verifying pair (task,sol) if it's valid
  * */
-bool verify(void *ptr_, task* _task, solution * _sol, unsigned char* out);
+bool verify(void *ptr_, const task* _task, const solution * _sol, unsigned char* out);
 #ifdef __cplusplus
 }
 #endif

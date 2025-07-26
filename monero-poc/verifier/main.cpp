@@ -5,8 +5,6 @@
 #include "structs.h"
 #include "keyUtils.h"
 #include "K12AndKeyUtil.h"
-#include "RandomX/src/randomx.h"
-#include "xmr.h"
 #include <stdexcept>
 #include <map>
 #include <mutex>
@@ -590,21 +588,13 @@ void verifyThread(int ignore)
     memset(&local_task, 0, sizeof(task));
     memset(&prevLocal_task, 0, sizeof(task));
     memset(&prevPrevLocal_task, 0, sizeof(task));
-    randomx_flags flags = randomx_get_flags();
-    randomx_cache *cache = randomx_alloc_cache(flags);
-    randomx_init_cache(cache, local_task.m_seed, 32);
-    randomx_vm *vm = randomx_create_vm(flags, cache, NULL);
+    auto oc_ptr = createOCVerifier();
     while (currentTask.taskIndex == 0) SLEEP(100); // wait for the first job
 
     while (!shouldExit)
     {
         if (local_task.taskIndex != currentTask.taskIndex)
         {
-            if (memcmp(local_task.m_seed, currentTask.m_seed, 32) != 0)
-            {
-                randomx_init_cache(cache, currentTask.m_seed, 32);
-                randomx_vm_set_cache(vm, cache);
-            }
             prevPrevLocal_task = prevLocal_task;
             prevLocal_task = local_task;
             local_task = currentTask;
@@ -665,34 +655,9 @@ void verifyThread(int ignore)
             }
 
             uint8_t out[32];
-            std::vector<uint8_t> block_template;
-            block_template.resize(matched_task.m_size, 0);
-            memcpy(block_template.data(), matched_task.m_template, matched_task.m_size);
-
-            // extract nonce
-            uint32_t extraNonce = candidate._nonceu64 >> 32;
-            uint32_t nonceu32 = candidate._nonceu64 & 0xFFFFFFFFU;
-            memcpy(block_template.data() + matched_task.m_extraNonceOffset, &extraNonce, 4);
-            uint8_t hashing_blob[256] = {0};
-            size_t hashing_blob_size = 0;
-
-            // convert from block template to minign blob
-            get_hashing_blob(block_template.data(), matched_task.m_size, hashing_blob, &hashing_blob_size);
-            memcpy(hashing_blob + XMR_NONCE_POS, &nonceu32, 4);
-
-            // do the hash
-            randomx_calculate_hash(vm, hashing_blob, hashing_blob_size, out);
-
+            bool isValid = verify(oc_ptr, &matched_task, &candidate, out);
             uint64_t v = ((uint64_t*)out)[3];
-            char hex[64];
-            byteToHex(out, hex, 32);
-
-//            RequestedCustomMiningSolutionVerification verifedSol;
-//            verifedSol.nonce = candidate.nonce;
-//            verifedSol.taskIndex = matched_task.taskIndex;
-            //verifedSol.padding = candidate.padding;
-
-            if (v < matched_task.m_target)
+            if (isValid)
             {
 //                verifedSol.isValid = 1;
                 gValid.fetch_add(1);
@@ -719,7 +684,7 @@ void verifyThread(int ignore)
 //                    verifedSol.isValid = 0;
 //                }
                 gInValid.fetch_add(1);
-                printf("Invalid Share from comp %d: %s\n", computorId, hex);
+                printf("Invalid Share from comp %d\n", computorId);
             }
 //            gReportedSolutionsVec.push_back(verifedSol);
         }
@@ -729,8 +694,7 @@ void verifyThread(int ignore)
         }
     }
 
-    randomx_destroy_vm(vm);
-    randomx_release_cache(cache);
+    destroySolVerifier(oc_ptr);
 }
 
 void listenerThread(const char* nodeIp)
@@ -935,24 +899,24 @@ void printTaskInfo(T* tk, std::string logHeader)
 
 static uint64_t lastTaskTimeStamp = 0;
 
-static randomx_flags gRandomXFlags;
-static randomx_cache *gRandomXCache;
-static randomx_vm * gRandomXVM = NULL;
-static uint8_t gRandomXCacheBuff[32];
+//static randomx_flags gRandomXFlags;
+//static randomx_cache *gRandomXCache;
+//static randomx_vm * gRandomXVM = NULL;
+//static uint8_t gRandomXCacheBuff[32];
 
-void initRandomX()
-{
-    gRandomXFlags = randomx_get_flags();
-    gRandomXCache = randomx_alloc_cache(gRandomXFlags);
-    randomx_init_cache(gRandomXCache, gRandomXCacheBuff, 32);
-    gRandomXVM = randomx_create_vm(gRandomXFlags, gRandomXCache, NULL);
-}
-
-void cleanRandomX()
-{
-    randomx_destroy_vm(gRandomXVM);
-    randomx_release_cache(gRandomXCache);
-}
+//void initRandomX()
+//{
+//    gRandomXFlags = randomx_get_flags();
+//    gRandomXCache = randomx_alloc_cache(gRandomXFlags);
+//    randomx_init_cache(gRandomXCache, gRandomXCacheBuff, 32);
+//    gRandomXVM = randomx_create_vm(gRandomXFlags, gRandomXCache, NULL);
+//}
+//
+//void cleanRandomX()
+//{
+//    randomx_destroy_vm(gRandomXVM);
+//    randomx_release_cache(gRandomXCache);
+//}
 
 //void verifySolutionFromNode(const XMRTask& rTask, std::vector<XMRSolution>& rSolutions)
 //{
@@ -1367,7 +1331,7 @@ int run(int argc, char *argv[]) {
     }
 
     // Fetch tasks from node ip
-    initRandomX();
+//    initRandomX();
 //    std::shared_ptr<std::thread> operator_thread;
 //    if (!seed.empty() && !operatorIp.empty())
 //    {
@@ -1406,7 +1370,7 @@ int run(int argc, char *argv[]) {
             }
         }
     }
-    cleanRandomX();
+//    cleanRandomX();
 
     return 0;
 }
