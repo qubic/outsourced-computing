@@ -6,7 +6,6 @@
   - [QUBIC's Monero Wallet Address](#qubics-monero-wallet-address)
   - [POC Phases](#poc-phases)
   - [The Principle](#the-principle)
-    - [](#)
     - [What Monero mining software to be used?](#what-monero-mining-software-to-be-used)
     - [How to receive a task?](#how-to-receive-a-task)
     - [How to send back a solution?](#how-to-send-back-a-solution)
@@ -14,17 +13,13 @@
 
 <!-- /TOC -->
 
-
 ## Highlevel Process Description
 ![Qubic - Outsourced Computing Highlevel Monero POC Process FlowChart](images/QubicOutsourcedComputing_MoneroPOC_v2.png)
 
 [Click here for PDF](images/QubicOutsourcedComputing_MoneroPOC_v2.pdf)
 
 ## QUBIC's Monero Wallet Address
-```
-Solo wallet: 47hhGMKbWpKfxDiqcejWGicVvQHEYd45AEaUyKVjcZywL8c8mtjN3oACGfdrsLrPGP2r49gvTBnBiTVQcEkfBNFEKCDy7ME
-View key: 577fd4a7278f55d2a9230d32823b81497b2e854d4a8702b1256a17cda42a760d
-```
+Wallet address and view key are valid per epoch and shared after an epoch ends on the Qubic discord.
 
 ## POC Phases
 The POC is junked into Phases.
@@ -107,8 +102,6 @@ struct
 >[!CAUTION]
 > The Above structs already contain the [RequestResponseHeader](https://github.com/qubic/core/blob/main/src/network_messages/header.h).
 
-### 
-
 ### What Monero mining software to be used?
 For the POC we gonna try with [XMRig](https://xmrig.com/). If you want to user your own. Feel free to do so.
 
@@ -139,5 +132,5 @@ Sign your solution packet with your computor seed. make the `dejavu = 0` to allo
 > Non encrypted solutions are legacy and may be not accepted by ARB. Please use latest encryption level.
 
 ### How to encrypt the solution?
-Please reach out to the core development team with a sign message from your computor to receive latest instructions.
+Please reach out to the core development team with a signed message from your computor to receive latest instructions.
 
