@@ -6,9 +6,11 @@
   - [QUBIC's Monero Wallet Address](#qubics-monero-wallet-address)
   - [POC Phases](#poc-phases)
   - [The Principle](#the-principle)
+    - [](#)
     - [What Monero mining software to be used?](#what-monero-mining-software-to-be-used)
     - [How to receive a task?](#how-to-receive-a-task)
     - [How to send back a solution?](#how-to-send-back-a-solution)
+    - [How to encrypt the solution?](#how-to-encrypt-the-solution)
 
 <!-- /TOC -->
 
@@ -57,14 +59,13 @@ struct
 
     unsigned long long taskIndex; // ever increasing number (unix timestamp in ms)
 
-    unsigned short firstComputorIndex, lastComputorIndex; // range of computors to which this task is meant to
-    unsigned int padding;
+    unsigned char m_template[896]; // monero block template
 
-    unsigned char m_blob[408]; // Job data from pool
-    unsigned long long m_size;  // length of the blob
-    unsigned long long m_target; // Pool difficulty
-    unsigned long long m_height; // Block height
-    unsigned char m_seed[32]; // Seed hash for XMR
+    unsigned long long m_extraNonceOffset; // offset to place extra nonce
+    unsigned long long m_size; // size of template
+    unsigned long long m_target; // target difficulty
+    unsigned long long m_height; // current network height
+    unsigned char m_seed[32]; // seed hash for XMR
 
     unsigned char signature[64];
 } task;
@@ -92,9 +93,11 @@ struct
     unsigned char gammingNonce[32];
 
     unsigned long long taskIndex; // sohuld match the index from task
-    unsigned short firstComputorIndex, lastComputorIndex; // copy & paste from task
-
-    unsigned int nonce;         // xmrig::JobResult.nonce
+    unsigned long long combinedNonce; // (extraNonce<<32) | nonce
+    unsigned long long encryptionLevel; // 0 = no encryption, 2 = EP173+ encryption
+    unsigned long long computorRandom; // random number which fullfils the condition computorRandom % 676 == ComputorIndex
+    unsigned long long reserve2; // reserved
+      
     unsigned char result[32];   // xmrig::JobResult.result
 
     unsigned char signature[64];
@@ -103,6 +106,8 @@ struct
 
 >[!CAUTION]
 > The Above structs already contain the [RequestResponseHeader](https://github.com/qubic/core/blob/main/src/network_messages/header.h).
+
+### 
 
 ### What Monero mining software to be used?
 For the POC we gonna try with [XMRig](https://xmrig.com/). If you want to user your own. Feel free to do so.
@@ -123,8 +128,16 @@ If you have found a solution, pack it into the solution struct.
 
 - `sourcePublicKey` must be your computor public key
 - `taskIndex` must be the task indes from recevied task
-- `nonce` must be the xmrig::JobResult.nonce and equal to a `value` such that `firstComputorIndex + nonce % (676 / task.NumberOfUpstreams) == computorIndex`
+- `combinedNonce` must be the xmrig::JobResult.nonce + your extranonce (`(extraNonce<<32) | nonce`) and equal to a `value` such that `firstComputorIndex + nonce % (676 / task.NumberOfUpstreams) == computorIndex`
+- `encryptionLevel` must be `2` = EP173+ Encryption; `0` is allowed for legacy purposes
+- `computorRandom` (ex `reserve1`) must be a random number and equal a `value` such that `computorRandom % 676 == computorIndex`; `0` is allowed for legacy purposes
 - `result` must be the result from xmrig::JobResult.result
 
 Sign your solution packet with your computor seed. make the `dejavu = 0` to allow propagation of your solution in the network.
+
+>[!CAUTION]
+> Non encrypted solutions are legacy and may be not accepted by ARB. Please use latest encryption level.
+
+### How to encrypt the solution?
+Please reach out to the core development team with a sign message from your computor to receive latest instructions.
 
