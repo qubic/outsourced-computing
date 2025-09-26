@@ -1,28 +1,14 @@
 cmake_minimum_required(VERSION 3.1)
 project(OCVerifier CXX)
-# Find GCC compiler
-find_program(GCC_COMPILER NAMES gcc g++
-		DOC "Path to the GNU C/C++ compiler")
-
-if(NOT GCC_COMPILER)
-	message(FATAL_ERROR "GCC/G++ compiler not found. Please install GCC or ensure it's in your PATH.")
-endif()
-
-set (CMAKE_CXX_STANDARD 17)
-if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-	add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    message(STATUS "Detected GCC/G++ compiler")
+    set(CXX_OCVERIFIER_FLAGS "-Wunused-variable")
 else()
-	SET(CXX_OCVERIFIER_FLAGS "-Wunused-variable")
+    message(FATAL_ERROR "Must use GCC/G++ to compile")
 endif()
 
 message(STATUS "Using C compiler: ${CMAKE_C_COMPILER}")
 message(STATUS "Using C++ compiler: ${CMAKE_CXX_COMPILER}")
-
-if(CMAKE_C_COMPILER MATCHES "gcc")
-	#ok
-else()
-	message(FATAL_ERROR "Must use gcc/g++ to compile")
-endif()
 
 set(XMR_ROOT "/root/monero/" CACHE PATH "Monero root folder")
 message(STATUS "This project requires monero header files to compile")
@@ -42,13 +28,22 @@ link_directories(${CMAKE_SOURCE_DIR}/precompiledMoneroLibraries/)
 add_library(oc_verifier_lib STATIC verifierLib.cpp xmr.cpp)
 ADD_EXECUTABLE(oc_verifier main.cpp ${FILES})
 
-target_link_libraries(oc_verifier pthread lmdb oc_verifier_lib cryptonote_basic cncrypto common ringct_basic device
-		cryptonote_format_utils_basic wallet-crypto epee easylogging version randomx boost_system boost_date_time
-		boost_chrono boost_filesystem boost_thread boost_regex boost_serialization boost_program_options sodium
-		unbound ssl crypto hidapi-libusb dl)
-target_link_libraries(oc_verifier_lib cryptonote_basic cncrypto common ringct_basic device
-		cryptonote_format_utils_basic wallet-crypto epee easylogging version randomx boost_system boost_date_time
-		boost_chrono boost_filesystem boost_thread boost_regex boost_serialization boost_program_options sodium
-		unbound ssl crypto hidapi-libusb dl)
+if (BOOST_ROOT)
+	message(STATUS "Look for Boost at: " ${BOOST_ROOT})
+else()
+	message(STATUS "Look for Boost at default path")
+endif()
+
+# This verion is required for precompiled libraries
+find_package(Boost 1.71 EXACT REQUIRED COMPONENTS
+    filesystem system date_time chrono thread regex serialization program_options
+)
+
+target_link_libraries(oc_verifier PRIVATE 
+		pthread lmdb oc_verifier_lib)
+target_link_libraries(oc_verifier_lib PRIVATE
+		cryptonote_basic cncrypto common ringct_basic device cryptonote_format_utils_basic
+		wallet-crypto epee easylogging version randomx ${Boost_LIBRARIES} sodium unbound
+		ssl crypto hidapi-libusb dl)
 target_compile_options(oc_verifier_lib PRIVATE -Ofast)
 set_property(TARGET oc_verifier PROPERTY COMPILE_WARNING_AS_ERROR ON)

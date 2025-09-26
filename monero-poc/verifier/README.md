@@ -1,4 +1,15 @@
 ### REQUIREMENTS
+
+The verifier will need monero repository set through `XMR_ROOT` variable when calling CMake, it also need some of libriaries that use by Monero
+
+```
+// Ubuntu
+sudo apt-get install libsodium-dev ibunbound-dev libhidapi-dev
+```
+
+In case of using precompiledMoneroLibraries, you will need the `boost 1.71.0` otherwise you need to rebuild everything by your self.
+
+
 Run this command after `git clone` to fetch RandomX library
 ```
 git submodule update --init --recursive
@@ -7,10 +18,10 @@ git submodule update --init --recursive
 
 On Linux, make sure `cmake` and `make` commands are installed and then run:
 ```
-mkdir build;
+mkdir build
 cd build;
-cmake ../;
-make;
+cmake ..  -DXMR_ROOT=<path to Monero> -DBOOST_ROOT=<path to compiled boost 1.71>
+make
 ```
 
 On Windows, use the CMake GUI to create a Visual Studio project and then build the executable in Visual Studio.

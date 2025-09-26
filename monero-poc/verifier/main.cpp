@@ -12,6 +12,7 @@
 #include <atomic>
 #include <sstream>
 #include <iostream>
+#include <filesystem>
 #include <csignal>
 #include "verifierLib.h"
 
@@ -195,7 +196,18 @@ MDB_dbi share_db;
 void setupDB()
 {
     printf("Initializing DB...\n");
-    database = new Database("./database");
+    const std::string dbPath = "./database";
+    // Check if directory exists, if not, create it
+    if (!std::filesystem::exists(dbPath)) 
+    {
+        if (!std::filesystem::create_directory(dbPath)) 
+        {
+            printf("Failed to create database directory!\n");
+            exit(1);
+        }
+    }
+
+    database = new Database(dbPath.c_str());
     share_db = database->open_db("shares");
 }
 
