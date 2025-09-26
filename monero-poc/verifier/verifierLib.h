@@ -51,6 +51,12 @@ void destroySolVerifier(void* ptr_);
  * Verifying pair (task,sol) if it's valid
  * */
 bool verify(void *ptr_, const task* _task, const solution * _sol, unsigned char* out);
+
+/*
+ * Get the computor ID from a solution
+ **/
+int getComputorIDFromSol(const solution* _sol);
+
 #ifdef __cplusplus
 }
 #endif

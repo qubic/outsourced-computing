@@ -75,3 +75,17 @@ bool verify(void *ptr_, const task* _task, const solution * _sol, uint8_t* out)
         return false;
     }
 }
+
+int getComputorIDFromSol(const solution* _sol)
+{
+    int computorID = 0;
+    if (_sol->reserve0 == 0)
+    {
+        computorID = (_sol->_nonceu64 >> 32ULL) % 676ULL;
+    }
+    else
+    {
+        computorID = _sol->reserve1 % 676ULL;
+    }
+    return computorID;
+}
