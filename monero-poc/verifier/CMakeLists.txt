@@ -10,6 +10,8 @@ endif()
 message(STATUS "Using C compiler: ${CMAKE_C_COMPILER}")
 message(STATUS "Using C++ compiler: ${CMAKE_CXX_COMPILER}")
 
+option(DUMMY_TEST "Building with testnest." OFF)
+
 set(XMR_ROOT "/root/monero/" CACHE PATH "Monero root folder")
 message(STATUS "This project requires monero header files to compile")
 message(STATUS "Setting XMR_ROOT at: " ${XMR_ROOT})
@@ -23,6 +25,7 @@ message(WARNING "This project is using many precompiled libraries, it is recomme
 SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} ${CXX_OCVERIFIER_FLAGS}")
 SET(FILES ${CMAKE_SOURCE_DIR}/connection.cpp
 		${CMAKE_SOURCE_DIR}/keyUtils.cpp
+		${CMAKE_SOURCE_DIR}/nodeVerifier.cpp
 )
 link_directories(${CMAKE_SOURCE_DIR}/precompiledMoneroLibraries/)
 add_library(oc_verifier_lib STATIC verifierLib.cpp xmr.cpp)
@@ -47,3 +50,7 @@ target_link_libraries(oc_verifier_lib PRIVATE
 		ssl crypto hidapi-libusb dl)
 target_compile_options(oc_verifier_lib PRIVATE -Ofast)
 set_property(TARGET oc_verifier PROPERTY COMPILE_WARNING_AS_ERROR ON)
+
+if (DUMMY_TEST)
+    add_definitions(-DDUMMY_TEST)
+endif()

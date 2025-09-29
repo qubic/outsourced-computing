@@ -22,10 +22,10 @@ struct solution
     unsigned char zero[32]; // empty/zero 0
     unsigned char gammingNonce[32];
 
-    unsigned long long _taskIndex;
-    unsigned long long _nonceu64; // (extraNonce<<32) | nonce
-    unsigned long long reserve0;
-    unsigned long long reserve1;
+    unsigned long long taskIndex;
+    unsigned long long combinedNonce; // (extraNonce<<32) | nonce
+    unsigned long long encryptionLevel; // 0 = no encryption, 2 = EP173+ encryption
+    unsigned long long computorRandom; // random number which fullfils the condition computorRandom % 676 == ComputorIndex
     unsigned long long reserve2;
 
     unsigned char result[32];   // xmrig::JobResult.result
@@ -70,8 +70,8 @@ int getComputorIDFromSol(const solution* _sol);
  *
  * @return 0 if successful.
  */
-int decryptSolution(const uint8_t * encryptedSol, const unsigned long long encryptedSolSizeInBytes,
-    const uint8_t * extraData, const unsigned long long extraDataSizeInbytes,
+int decryptSolution(const unsigned char * encryptedSol, const unsigned long long encryptedSolSizeInBytes,
+    const unsigned char * extraData, const unsigned long long extraDataSizeInbytes,
     solution* out);
 
 #ifdef __cplusplus
