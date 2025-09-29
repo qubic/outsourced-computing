@@ -57,6 +57,23 @@ bool verify(void *ptr_, const task* _task, const solution * _sol, unsigned char*
  **/
 int getComputorIDFromSol(const solution* _sol);
 
+/**
+ * @brief Decrypt the solutions.
+ *
+ * Currently, this function is implemented as a no-op (solutions are not actually encrypted).
+ *
+ * @param[in] encryptedSol         Pointer to the encrypted solution data.
+ * @param[in] encryptedSolSizeInBytes Size of the encrypted solution data in bytes.
+ * @param[in] extraData            Pointer to additional data required for decryption.
+ * @param[in] extraDataSizeInbytes Size of the extra data in bytes.
+ * @param[out] out                 Pointer to the decrypted solution output.
+ *
+ * @return 0 if successful.
+ */
+int decryptSolution(const uint8_t * encryptedSol, const unsigned long long encryptedSolSizeInBytes,
+    const uint8_t * extraData, const unsigned long long extraDataSizeInbytes,
+    solution* out);
+
 #ifdef __cplusplus
 }
 #endif

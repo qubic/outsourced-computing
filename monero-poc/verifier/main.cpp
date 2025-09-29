@@ -741,7 +741,15 @@ void listenerThread(const char* nodeIp)
             {
                 if (buff.size() == sizeof(solution))
                 {
-                    solution* share = (solution*)buff.data();
+                    solution decryptedSolution;
+                    solution* share = &decryptedSolution;
+                    int decrypt_sts = decryptSolution(buff.data(), buff.size(), nullptr, 0, share);
+                    if (decrypt_sts)
+                    {
+                        printf("Can not decrypt solution.\n");
+                        continue;
+                    }
+
                     char iden[64] = {0};
                     getIdentityFromPublicKey(share->sourcePublicKey, iden, false);
                     uint8_t sharedKeyAndGammingNonce[64];
@@ -758,7 +766,7 @@ void listenerThread(const char* nodeIp)
                         continue;
                     }
 
-                    int computorNonceID = (share->_nonceu64 >> 32ULL) % 676;
+                    int computorNonceID = getComputorIDFromSol(share);
                     if (gammingKey[0] != 2)
                     {
                         printf("Wrong type from comps (%s) No.%d. want %d | have %d\n", iden, computorNonceID, 2, gammingKey[0]);

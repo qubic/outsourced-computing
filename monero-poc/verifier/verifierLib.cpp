@@ -89,3 +89,16 @@ int getComputorIDFromSol(const solution* _sol)
     }
     return computorID;
 }
+
+int decryptSolution(const uint8_t * encryptedSol, const unsigned long long encryptedSolSizeInBytes,
+    const uint8_t * extraData, const unsigned long long extraDataSizeInbytes,
+    solution* out)
+{
+    // Simply copy the data
+    if (encryptedSolSizeInBytes == sizeof(solution))
+    {   
+        memcpy(out, encryptedSol, sizeof(solution));
+        return 0;
+    }
+    return 1;
+}
