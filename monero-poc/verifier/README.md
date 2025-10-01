@@ -24,7 +24,23 @@ cmake ..  -DXMR_ROOT=<path to Monero> -DBOOST_ROOT=<path to compiled boost 1.71>
 make
 ```
 
+<<<<<<< HEAD
 On Windows, use the CMake GUI to create a Visual Studio project and then build the executable in Visual Studio.
+=======
+## Testnet
+Run belows command 
+
+```
+mkdir build
+cd build;
+cmake ..  -DXMR_ROOT=<path to Monero> -DBOOST_ROOT=<path to compiled boost 1.71> -DDUMMY_TEST=1
+make
+```
+
+
+## Docker
+Docker image can be built using `build_docker.sh`. Please run with `-h` for detail information
+>>>>>>> dd85ae0 (a)
 
 
 ### USAGE
@@ -65,5 +81,6 @@ The verifier currently supports **three modes running in parallel**:
 # Fetch from both peers and node, and submit results
 ./oc_verifier --peers [nodeip0],[nodeip1],...,[nodeipN] --seed [OPERATOR seed] --nodeip [OPERATOR IP]
 ```
+
 Screenshot:
 ![image](https://github.com/user-attachments/assets/c629abc8-afb9-4d05-97c5-487456946774)

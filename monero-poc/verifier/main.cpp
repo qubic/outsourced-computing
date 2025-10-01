@@ -17,7 +17,7 @@
 #include "verifierLib.h"
 #include "nodeVerifier.h"
 
-#if DUMMY_TEST
+#if TESTNET_ENABLE
 #define DISPATCHER "DISPAPLNOYSWXCJMZEMFUNCCMMJANGQPYJDSEXZTTBFSUEPYPEKCICADBUCJ"
 #else
 #define DISPATCHER "XPXYKFLGSWRHRGAUKWFWVXCDVEYAPCPCNUTMUDWFGDYQCWZNJMWFZEEGCFFO"
@@ -215,7 +215,7 @@ uint64_t compScore[676];
 uint64_t prevTask = 0;
 std::mutex compScoreLock;
 
-#if DUMMY_TEST
+#if TESTNET_ENABLE
 #define OPERATOR_PORT 31841
 #else
 #define OPERATOR_PORT 21841
@@ -734,7 +734,7 @@ int run(int argc, char *argv[]) {
     setupDB();
 
     // Print parsed values
-#if DUMMY_TEST
+#if TESTNET_ENABLE
     std::cout << "DUMMY TEST mode enabled! " << std::endl;
 #endif
     
