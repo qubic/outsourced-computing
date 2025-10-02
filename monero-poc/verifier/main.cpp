@@ -218,7 +218,7 @@ std::mutex compScoreLock;
 #if DUMMY_TEST
 #define OPERATOR_PORT 31841
 #else
-#define OPERATOR_PORT 31841
+#define OPERATOR_PORT 21841
 #endif
 
 #define PORT 21841
@@ -581,6 +581,7 @@ void listenerThread(const char* nodeIp)
                     debug_log += std::string(dbg); memset(dbg, 0, sizeof(dbg));
                     sprintf(dbg, " | height %llu\n", tk->m_height);
                     debug_log += std::string(dbg); memset(dbg, 0, sizeof(dbg));
+                    printf("%s", debug_log.c_str());
                 }
                 // TODO: help relaying the messages to connected peers
 

@@ -42,15 +42,28 @@ find_package(Boost 1.71 EXACT REQUIRED COMPONENTS
     filesystem system date_time chrono thread regex serialization program_options
 )
 
-target_link_libraries(oc_verifier PRIVATE 
-		pthread lmdb oc_verifier_lib)
+target_include_directories(oc_verifier_lib PRIVATE ${Boost_INCLUDE_DIRS})
 target_link_libraries(oc_verifier_lib PRIVATE
 		cryptonote_basic cncrypto common ringct_basic device cryptonote_format_utils_basic
 		wallet-crypto epee easylogging version randomx ${Boost_LIBRARIES} sodium unbound
 		ssl crypto hidapi-libusb dl)
 target_compile_options(oc_verifier_lib PRIVATE -Ofast)
+
+target_link_libraries(oc_verifier PRIVATE pthread lmdb oc_verifier_lib)
 set_property(TARGET oc_verifier PROPERTY COMPILE_WARNING_AS_ERROR ON)
 
 if (DUMMY_TEST)
     add_definitions(-DDUMMY_TEST)
+endif()
+
+# Install related libs and executable
+# Install executables
+install(TARGETS oc_verifier testnetDispatcher
+    RUNTIME DESTINATION bin)
+
+# Install Boost libs
+if(BOOST_ROOT)
+    install(DIRECTORY ${BOOST_ROOT}/lib/
+        DESTINATION lib/boost
+        FILES_MATCHING PATTERN "*.so*")
 endif()

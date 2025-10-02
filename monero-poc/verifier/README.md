@@ -4,7 +4,7 @@ The verifier will need monero repository set through `XMR_ROOT` variable when ca
 
 ```
 // Ubuntu
-sudo apt-get install libsodium-dev ibunbound-dev libhidapi-dev
+sudo apt-get install libsodium-dev ibunbound-dev libhidapi-dev liblmdb-dev libssl-dev
 ```
 
 In case of using precompiledMoneroLibraries, you will need the `boost 1.71.0` otherwise you need to rebuild everything by your self.
