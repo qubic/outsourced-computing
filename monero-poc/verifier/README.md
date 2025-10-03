@@ -24,24 +24,19 @@ cmake ..  -DXMR_ROOT=<path to Monero> -DBOOST_ROOT=<path to compiled boost 1.71>
 make
 ```
 
-<<<<<<< HEAD
-On Windows, use the CMake GUI to create a Visual Studio project and then build the executable in Visual Studio.
-=======
 ## Testnet
 Run belows command 
 
 ```
 mkdir build
 cd build;
-cmake ..  -DXMR_ROOT=<path to Monero> -DBOOST_ROOT=<path to compiled boost 1.71> -DDUMMY_TEST=1
+cmake ..  -DXMR_ROOT=<path to Monero> -DBOOST_ROOT=<path to compiled boost 1.71> -DTESTNET_ENABLE=1
 make
 ```
 
 
 ## Docker
 Docker image can be built using `build_docker.sh`. Please run with `-h` for detail information
->>>>>>> dd85ae0 (a)
-
 
 ### USAGE
 
@@ -80,6 +75,16 @@ The verifier currently supports **three modes running in parallel**:
 
 # Fetch from both peers and node, and submit results
 ./oc_verifier --peers [nodeip0],[nodeip1],...,[nodeipN] --seed [OPERATOR seed] --nodeip [OPERATOR IP]
+```
+
+### Docker run
+```bash
+docker run -it --rm --init [docker image] bash -c "./bin/oc_verifier --peers [nodeip0],[nodeip1],...,[nodeipN]"
+
+docker run -it --rm --init [docker image] bash -c "./bin/oc_verifier --seed [OPERATOR seed] --nodeip [OPERATOR IP]"
+
+docker run -it --rm --init [docker image] bash -c "./bin/oc_verifier --peers [nodeip0],[nodeip1],...,[nodeipN] --seed [OPERATOR seed] --nodeip [OPERATOR IP]"
+
 ```
 
 Screenshot:
