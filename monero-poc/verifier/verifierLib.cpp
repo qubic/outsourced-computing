@@ -53,8 +53,8 @@ bool verify(void *ptr_, const task* _task, const solution * _sol, uint8_t* out)
     block_template.resize(_task->m_size, 0);
     memcpy(block_template.data(), _task->m_template, _task->m_size);
 
-    uint32_t extraNonce = _sol->_nonceu64 >> 32;
-    uint32_t nonceu32 = _sol->_nonceu64 & 0xFFFFFFFFU;
+    uint32_t extraNonce = _sol->combinedNonce >> 32;
+    uint32_t nonceu32 = _sol->combinedNonce & 0xFFFFFFFFU;
     memcpy(block_template.data() + _task->m_extraNonceOffset, &extraNonce, 4);
     uint8_t hashing_blob[256] = {0};
     size_t hashing_blob_size = 0;
@@ -74,4 +74,43 @@ bool verify(void *ptr_, const task* _task, const solution * _sol, uint8_t* out)
     {
         return false;
     }
+}
+
+int getComputorIDFromSol(const solution* _sol)
+{
+    int computorID = 0;
+    if (_sol->encryptionLevel == 0)
+    {
+        computorID = (_sol->combinedNonce >> 32ULL) % 676ULL;
+    }
+    else
+    {
+        computorID = _sol->computorRandom % 676ULL;
+    }
+    return computorID;
+}
+
+int decryptSolution(const uint8_t * encryptedSol, const unsigned long long encryptedSolSizeInBytes,
+    const uint8_t * extraData, const unsigned long long extraDataSizeInbytes,
+    solution* out)
+{
+    if (((const solution*)encryptedSol)->encryptionLevel == 0)
+    {
+        // Simply copy the data
+        if (encryptedSolSizeInBytes == sizeof(solution))
+        {   
+            memcpy(out, encryptedSol, sizeof(solution));
+            return 0;
+        }
+    }
+    else
+    {
+        // Empty decryption. Need to be filled
+        if (encryptedSolSizeInBytes == sizeof(solution))
+        {   
+            memcpy(out, encryptedSol, sizeof(solution));
+            return 0;
+        }
+    }
+    return 1;
 }

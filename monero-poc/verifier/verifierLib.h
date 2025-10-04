@@ -22,10 +22,10 @@ struct solution
     unsigned char zero[32]; // empty/zero 0
     unsigned char gammingNonce[32];
 
-    unsigned long long _taskIndex;
-    unsigned long long _nonceu64; // (extraNonce<<32) | nonce
-    unsigned long long reserve0;
-    unsigned long long reserve1;
+    unsigned long long taskIndex;
+    unsigned long long combinedNonce; // (extraNonce<<32) | nonce
+    unsigned long long encryptionLevel; // 0 = no encryption, 2 = EP173+ encryption
+    unsigned long long computorRandom; // random number which fullfils the condition computorRandom % 676 == ComputorIndex
     unsigned long long reserve2;
 
     unsigned char result[32];   // xmrig::JobResult.result
@@ -51,6 +51,29 @@ void destroySolVerifier(void* ptr_);
  * Verifying pair (task,sol) if it's valid
  * */
 bool verify(void *ptr_, const task* _task, const solution * _sol, unsigned char* out);
+
+/*
+ * Get the computor ID from a solution
+ **/
+int getComputorIDFromSol(const solution* _sol);
+
+/**
+ * @brief Decrypt the solutions.
+ *
+ * Currently, this function is implemented as a no-op (solutions are not actually encrypted).
+ *
+ * @param[in] encryptedSol         Pointer to the encrypted solution data.
+ * @param[in] encryptedSolSizeInBytes Size of the encrypted solution data in bytes.
+ * @param[in] extraData            Pointer to additional data required for decryption.
+ * @param[in] extraDataSizeInbytes Size of the extra data in bytes.
+ * @param[out] out                 Pointer to the decrypted solution output.
+ *
+ * @return 0 if successful.
+ */
+int decryptSolution(const unsigned char * encryptedSol, const unsigned long long encryptedSolSizeInBytes,
+    const unsigned char * extraData, const unsigned long long extraDataSizeInbytes,
+    solution* out);
+
 #ifdef __cplusplus
 }
 #endif
