@@ -256,7 +256,7 @@ void sendTaskAndShare(QCPtr pConnection, int sharePerTask, bool legacyNonce)
 void dispatchRun(const char *nodeIp, int nodePort, int rateLimitPerMin, int sharePerTask, bool legacyNonce)
 {
     int64_t timeBetweenSend = 60000 / std::max(rateLimitPerMin, 1);
-
+    auto startTime = std::chrono::system_clock::now();
     QCPtr qc;
     bool needReconnect = true;
     while (!shouldExit.load())
@@ -267,12 +267,18 @@ void dispatchRun(const char *nodeIp, int nodePort, int rateLimitPerMin, int shar
             {
                 needReconnect = false;
                 qc = make_qc(nodeIp, nodePort);
+                startTime = std::chrono::system_clock::now();
             }
 
             // Send task and sols
             sendTaskAndShare(qc, sharePerTask, legacyNonce);
 
             std::this_thread::sleep_for(std::chrono::milliseconds(timeBetweenSend));
+            // Check timeout
+            if (std::chrono::system_clock::now() - startTime > std::chrono::milliseconds(10000)) 
+            {
+                needReconnect = true;
+            }
         }
         catch (std::logic_error &ex)
         {
