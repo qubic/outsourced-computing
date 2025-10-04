@@ -99,13 +99,12 @@ constexpr uint64_t taskPayloadSize = sizeof(task) - taskPayloadOffset - 64;     
 constexpr uint64_t solutionPayloadOffset = 3 * 32;                                      // pubKey, zeros, gammingNonce and signature;
 constexpr uint64_t solutionPayloadSize = sizeof(solution) - solutionPayloadOffset - 64; // minus pubKey, zeros, gammingNonce and signature;
 
-// The time windows allow we get more task from previous.
+// Timeout of a connection. Increase it if the connection is robust
+constexpr uint64_t NODE_CONNECTION_TIMEOUT = 10000; // 11000 is set in connection implementation, so 10000 is chosen
 // This will allow us to get late arrival task
-constexpr int64_t TIME_WINDOWS_IN_MS = 20000;
-// Params controls if we should skip too late task compare to current time stamp
-constexpr int64_t OFFSET_TIME_STAMP_IN_MS = 60000;
+constexpr int64_t TIME_WINDOWS_OFFSET_IN_MS = 10000;
 // Params controls avoid we stay in submitted loops for too long
-constexpr int64_t REPORTED_TIMEOUT_IN_MS = 1000;
+constexpr int64_t REPORTED_TIMEOUT_IN_MS = 10000;
 
 class NodeVerifier
 {
@@ -418,7 +417,7 @@ std::vector<unsigned char> NodeVerifier::waitForPackage( QCPtr pConnection, int 
 
 bool NodeVerifier::fetchCustomMiningData(QCPtr pConnection, const char *logHeader)
 {
-    bool haveCustomMiningData = false;
+    mNodeTasks.clear();
     struct
     {
         RequestResponseHeader header;
@@ -430,7 +429,11 @@ bool NodeVerifier::fetchCustomMiningData(QCPtr pConnection, const char *logHeade
     packet.header.randomizeDejavu();
     packet.header.setType(RequestedCustomMiningData::type);
 
-    uint64_t fromTaskIndex = mLastTaskTimeStamp > TIME_WINDOWS_IN_MS ? mLastTaskTimeStamp - TIME_WINDOWS_IN_MS : mLastTaskTimeStamp;
+    auto now = std::chrono::system_clock::now();
+    auto duration = now.time_since_epoch();
+    auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+
+    uint64_t fromTaskIndex = (uint64_t)(milliseconds - TIME_WINDOWS_OFFSET_IN_MS);
     uint64_t toTaskIndex = 0; // Fetch all the task from the fromTaskIndex
     packet.requestData.dataType = RequestedCustomMiningData::taskType;
     packet.requestData.fromTaskIndex = fromTaskIndex;
@@ -467,35 +470,24 @@ bool NodeVerifier::fetchCustomMiningData(QCPtr pConnection, const char *logHeade
                     memcpy((uint8_t *)&respondTask + taskPayloadOffset, pTaskData, taskPayloadSize);
                     mNodeTasks[respondTask.taskIndex] = respondTask;
                 }
-                //std::cout << "Received task " << mNodeTasks.size() << std::endl;
-                
+
                 for (auto it = mNodeTasks.begin(); it != mNodeTasks.end(); ++it)
                 {
                     lastReceivedTaskTs = std::max((unsigned long long)it->first, lastReceivedTaskTs);
                 }
-                haveCustomMiningData = mNodeTasks.size() > 0;
 
                 // From current active task. Try to fetch solutions/shares of the task
                 getCustomMiningSolutions(pConnection, logHeader, mNodeTasks);
-
-                // Update the last time stamp by the last task received
-                if (lastReceivedTaskTs > 0)
-                {
-                    mLastTaskTimeStamp = lastReceivedTaskTs;
-                }
             }
         }
     }
 
-    return haveCustomMiningData;
+    return !mNodeTasks.empty();
 }
 
 void NodeVerifier::getSolutionsThread()
 {
-    auto now = std::chrono::system_clock::now();
-    auto duration = now.time_since_epoch();
-    auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-    mLastTaskTimeStamp = milliseconds;
+    auto startTime = std::chrono::system_clock::now();
 
     QCPtr qc;
     bool needReconnect = true;
@@ -510,25 +502,25 @@ void NodeVerifier::getSolutionsThread()
                 needReconnect = false;
                 qc = make_qc(mNodeIP.c_str(), mNodePort);
 
-                now = std::chrono::system_clock::now();
-                duration = now.time_since_epoch();
-                mLastTaskTimeStamp = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-
-                std::cout<< log_header << "Connected OPERATOR node " <<  mNodeIP.c_str() << std::endl;
+                startTime = std::chrono::system_clock::now();
+                std::cout<< log_header << "Connected/Reconnected to OPERATOR node " <<  mNodeIP.c_str() << std::endl;
             }
 
-            bool sts = fetchCustomMiningData(qc, log_header.c_str());
-            if (!sts)
-            {
-                now = std::chrono::system_clock::now();
-                duration = now.time_since_epoch();
-                mLastTaskTimeStamp = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-            }
+            // Fetch tasks and solution from node
+            fetchCustomMiningData(qc, log_header.c_str());
 
             // Report verified solutions if there is any
             reportVerifiedSol(qc);
 
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+            // Check timeout
+            if (NODE_CONNECTION_TIMEOUT > 0 &&
+                std::chrono::system_clock::now() - startTime > std::chrono::milliseconds(NODE_CONNECTION_TIMEOUT)) 
+            {
+                needReconnect = true;
+            }
+
         }
         catch (std::logic_error &ex)
         {

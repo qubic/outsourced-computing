@@ -137,6 +137,7 @@ void QubicConnection::getHandshakeData(std::vector<uint8_t>& buffer)
 
 QubicConnection::~QubicConnection()
 {
+    shutdown(mSocket, SHUT_RDWR);
 	close(mSocket);
 }
 
