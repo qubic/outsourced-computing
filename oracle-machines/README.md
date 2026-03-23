@@ -2,11 +2,12 @@
 <!-- TOC -->
 
 - [Qubic - Oracle Machines](#qubic---oracle-machines)
-    - [Purpose](#purpose)
-    - [How It Works](#how-it-works)
-    - [Key Characteristics](#key-characteristics)
-    - [Example Use Cases](#example-use-cases)
-    - [Why It Matters](#why-it-matters)
+  - [Purpose](#purpose)
+  - [How It Works](#how-it-works)
+  - [Key Characteristics](#key-characteristics)
+  - [Example Use Cases](#example-use-cases)
+  - [Why It Matters](#why-it-matters)
+  - [Technical Design](#technical-design)
 
 <!-- /TOC -->
 
@@ -40,3 +41,6 @@ Oracle Machines (OM) allow Qubic to access information from the outside world (p
 
 Oracle Machines unlock real-world use cases for Qubic by bringing trusted external data on-chain.
 They are essential for DeFi, cross-chain validation, and automated decision-making within smart contracts.
+
+## Technical Design
+Please see [Oracle Machines](./oracle-machines.md)
