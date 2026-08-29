@@ -1,4 +1,15 @@
 ### REQUIREMENTS
+
+The verifier will need monero repository set through `XMR_ROOT` variable when calling CMake, it also need some of libriaries that use by Monero
+
+```
+// Ubuntu
+sudo apt-get install libsodium-dev ibunbound-dev libhidapi-dev liblmdb-dev libssl-dev
+```
+
+In case of using precompiledMoneroLibraries, you will need the `boost 1.71.0` otherwise you need to rebuild everything by your self.
+
+
 Run this command after `git clone` to fetch RandomX library
 ```
 git submodule update --init --recursive
@@ -7,14 +18,25 @@ git submodule update --init --recursive
 
 On Linux, make sure `cmake` and `make` commands are installed and then run:
 ```
-mkdir build;
+mkdir build
 cd build;
-cmake ../;
-make;
+cmake ..  -DXMR_ROOT=<path to Monero> -DBOOST_ROOT=<path to compiled boost 1.71>
+make
 ```
 
-On Windows, use the CMake GUI to create a Visual Studio project and then build the executable in Visual Studio.
+## Testnet
+Run belows command 
 
+```
+mkdir build
+cd build;
+cmake ..  -DXMR_ROOT=<path to Monero> -DBOOST_ROOT=<path to compiled boost 1.71> -DTESTNET_ENABLE=1
+make
+```
+
+
+## Docker
+Docker image can be built using `build_docker.sh`. Please run with `-h` for detail information
 
 ### USAGE
 
@@ -54,5 +76,16 @@ The verifier currently supports **three modes running in parallel**:
 # Fetch from both peers and node, and submit results
 ./oc_verifier --peers [nodeip0],[nodeip1],...,[nodeipN] --seed [OPERATOR seed] --nodeip [OPERATOR IP]
 ```
+
+### Docker run
+```bash
+docker run -it --rm --init [docker image] bash -c "./bin/oc_verifier --peers [nodeip0],[nodeip1],...,[nodeipN]"
+
+docker run -it --rm --init [docker image] bash -c "./bin/oc_verifier --seed [OPERATOR seed] --nodeip [OPERATOR IP]"
+
+docker run -it --rm --init [docker image] bash -c "./bin/oc_verifier --peers [nodeip0],[nodeip1],...,[nodeipN] --seed [OPERATOR seed] --nodeip [OPERATOR IP]"
+
+```
+
 Screenshot:
 ![image](https://github.com/user-attachments/assets/c629abc8-afb9-4d05-97c5-487456946774)
