@@ -102,8 +102,14 @@ static int connect(const char* nodeIp, int nodePort)
 
 QubicConnection::QubicConnection(const char* nodeIp, int nodePort)
 {
-	memset(mNodeIp, 0, 32);
-	memcpy(mNodeIp, nodeIp, strlen(nodeIp));
+	memset(mNodeIp, 0, sizeof(mNodeIp));
+	// Bound the copy to the buffer: nodeIp is caller-supplied and an over-long
+	// value would otherwise overflow the fixed-size mNodeIp. Keep a byte for
+	// the terminator (mNodeIp was just zeroed).
+	size_t nodeIpLen = strlen(nodeIp);
+	if (nodeIpLen >= sizeof(mNodeIp))
+		nodeIpLen = sizeof(mNodeIp) - 1;
+	memcpy(mNodeIp, nodeIp, nodeIpLen);
 	mNodePort = nodePort;
 	mSocket = connect(nodeIp, nodePort);
     if (mSocket < 0)
@@ -218,7 +224,12 @@ T QubicConnection::receivePacketWithHeaderAs()
         {
             // skip this packet and keep receiving
             packetSize = header.size();
-            remainingSize = packetSize - sizeof(RequestResponseHeader);
+            remainingSize = packetSize - (int)sizeof(RequestResponseHeader);
+            // header.size() is node-controlled and returns INT32_MAX for a
+            // zero size field ("broken packet"), so remainingSize can exceed
+            // mBuffer. Reject it before recv() overruns the buffer.
+            if (remainingSize < 0 || (size_t)remainingSize > sizeof(mBuffer))
+                throw std::logic_error("Invalid packet size from node.");
             receiveAllDataOrThrowException(mBuffer, remainingSize);
             continue;
         }
@@ -226,7 +237,10 @@ T QubicConnection::receivePacketWithHeaderAs()
     }
     
     packetSize = header.size();
-    remainingSize = packetSize - sizeof(RequestResponseHeader);
+    remainingSize = packetSize - (int)sizeof(RequestResponseHeader);
+    // Same node-controlled size as above: bound it to mBuffer before filling.
+    if (remainingSize < 0 || (size_t)remainingSize > sizeof(mBuffer))
+        throw std::logic_error("Invalid packet size from node.");
     T result;
     memset(&result, 0, sizeof(T));
     if (remainingSize)
